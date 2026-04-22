@@ -11,6 +11,7 @@ import argparse
 from utils import set_random_seeds
 import joblib
 from tqdm import tqdm
+import variants
 
 
 # Create a functaset on MNIST, Fashion MNIST or ModelNet10
@@ -120,6 +121,11 @@ def get_args():
     parser.add_argument('--lbfgs', action='store_true', default=False, help="whether to use L-BFGS or SGD/Adam optimization.")
     parser.add_argument('--saveroot', type=str, default=".", help='root save dir to save functasets')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Pass "cuda" to use gpu')
+    parser.add_argument('--variant', choices=variants.available(), default='vanilla',
+                        help='SIREN variant used at training time. Must match the '
+                             'variant recorded in the checkpoint so architecture '
+                             'wrappers (if any) line up before loading state_dict.')
+    variants.add_all_variant_args(parser)
     return parser.parse_args()
 if __name__ == '__main__':
 
@@ -140,6 +146,7 @@ if __name__ == '__main__':
         dataloader_test = get_mnist_loader(args.data_path, train=False, batch_size=1, fashion = args.dataset=="fmnist")
         modSiren = ModulatedSIREN(height=28, width=28, hidden_features=args.hidden_dim, num_layers=args.depth, modul_features=args.mod_dim) #28,28 is mnist and fmnist dims
 
+    modSiren = variants.build(args.variant, modSiren, args)
     pretrained = torch.load(args.checkpoint)
     modSiren.load_state_dict(pretrained['state_dict'])
     functa_trainset = create_functaset(modSiren, dataloader_train, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet", lbfgs=args.lbfgs)
