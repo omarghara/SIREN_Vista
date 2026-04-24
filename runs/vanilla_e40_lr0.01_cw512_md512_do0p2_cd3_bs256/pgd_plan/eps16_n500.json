@@ -1,0 +1,12 @@
+{
+  "constraint": 0.06274509803921569,
+  "pgd_iters": 100,
+  "pgd_lr": 0.01,
+  "n_samples": 500,
+  "clean_correct": 486,
+  "robust_correct_unconditional": 356,
+  "both_correct": 356,
+  "clean_acc": 0.972,
+  "robust_acc": 0.712,
+  "conditional_robust_acc": 0.7325102880658436
+}

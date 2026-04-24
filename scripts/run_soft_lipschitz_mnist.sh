@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # ---- hyperparameters (edit these) --------------------------------------------
-L=30.0                 # per-layer Lipschitz budget L.
+L=0.5                 # per-layer Lipschitz budget L.
                       # Sine layers get sigma-cap L/freq, readout gets L.
                       # L=1 is tight at freq=30; L=30 ~= pre-change defaults.
 LAM=1              # penalty weight lambda.
