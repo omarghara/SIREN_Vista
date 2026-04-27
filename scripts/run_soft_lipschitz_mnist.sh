@@ -14,12 +14,12 @@
 set -euo pipefail
 
 # ---- hyperparameters (edit these) --------------------------------------------
-L=0.5                 # per-layer Lipschitz budget L.
+L=0.03                 # per-layer Lipschitz budget L.
                       # Sine layers get sigma-cap L/freq, readout gets L.
                       # L=1 is tight at freq=30; L=30 ~= pre-change defaults.
-LAM=1              # penalty weight lambda.
-APPLY_TO=all    # sine_only | sine_and_readout | all
-SKIP_FIRST=1          # 1 = exclude sine.0 from the penalty (sigma(W_0)
+LAM=10              # penalty weight lambda.
+APPLY_TO=sine_and_readout    # sine_only | sine_and_readout | all
+SKIP_FIRST=0          # 1 = exclude sine.0 from the penalty (sigma(W_0)
                       # does not enter the phi->output Lipschitz bound
                       # and its large coord-input init otherwise dominates
                       # the penalty budget). 0 = include all sine layers.
@@ -50,9 +50,13 @@ PGD_INNER_LR=0.01     # inner-loop modulation lr (should match MAKESET_ITERS lr
 
 # Slug must mirror variants/soft_lipschitz.py :: SoftLipschitz.slug()
 # Python uses "{L:g}" (strips trailing zeros) and "{lam:.0e}" (zero-padded exp).
-L_TAG=$(printf "%g" "$L")
+# L_TAG=$(printf "%g" "$L")
+# LAM_TAG=$(printf "%.0e" "$LAM")
+# SLUG="softlip_L${L_TAG}_lam${LAM_TAG}_${APPLY_TO}"
+#########################################################
 LAM_TAG=$(printf "%.0e" "$LAM")
-SLUG="softlip_L${L_TAG}_lam${LAM_TAG}_${APPLY_TO}"
+SLUG="softlip_hardcap90_lam${LAM_TAG}_${APPLY_TO}"
+#########################################################
 if [[ "${SKIP_FIRST}" -eq 1 ]]; then
     SLUG="${SLUG}_skip0"
 fi

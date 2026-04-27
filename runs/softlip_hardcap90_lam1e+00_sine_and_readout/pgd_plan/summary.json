@@ -1,0 +1,62 @@
+[
+  {
+    "constraint": 0.03137254901960784,
+    "pgd_iters": 100,
+    "pgd_lr": 0.01,
+    "n_samples": 200,
+    "clean_correct": 195,
+    "robust_correct_unconditional": 188,
+    "both_correct": 188,
+    "clean_acc": 0.975,
+    "robust_acc": 0.94,
+    "conditional_robust_acc": 0.9641025641025641,
+    "model": "softlip_hardcap90_lam1e+00_sine_and_readout",
+    "path": "runs/softlip_hardcap90_lam1e+00_sine_and_readout/pgd_plan/eps8_n200.json",
+    "epsilon_255": 8
+  },
+  {
+    "constraint": 0.06274509803921569,
+    "pgd_iters": 100,
+    "pgd_lr": 0.01,
+    "n_samples": 500,
+    "clean_correct": 484,
+    "robust_correct_unconditional": 423,
+    "both_correct": 423,
+    "clean_acc": 0.968,
+    "robust_acc": 0.846,
+    "conditional_robust_acc": 0.8739669421487604,
+    "model": "softlip_hardcap90_lam1e+00_sine_and_readout",
+    "path": "runs/softlip_hardcap90_lam1e+00_sine_and_readout/pgd_plan/eps16_n500.json",
+    "epsilon_255": 16
+  },
+  {
+    "constraint": 0.12549019607843137,
+    "pgd_iters": 100,
+    "pgd_lr": 0.01,
+    "n_samples": 200,
+    "clean_correct": 195,
+    "robust_correct_unconditional": 83,
+    "both_correct": 83,
+    "clean_acc": 0.975,
+    "robust_acc": 0.415,
+    "conditional_robust_acc": 0.4256410256410256,
+    "model": "softlip_hardcap90_lam1e+00_sine_and_readout",
+    "path": "runs/softlip_hardcap90_lam1e+00_sine_and_readout/pgd_plan/eps32_n200.json",
+    "epsilon_255": 32
+  },
+  {
+    "constraint": 0.25098039215686274,
+    "pgd_iters": 100,
+    "pgd_lr": 0.01,
+    "n_samples": 200,
+    "clean_correct": 195,
+    "robust_correct_unconditional": 6,
+    "both_correct": 6,
+    "clean_acc": 0.975,
+    "robust_acc": 0.03,
+    "conditional_robust_acc": 0.03076923076923077,
+    "model": "softlip_hardcap90_lam1e+00_sine_and_readout",
+    "path": "runs/softlip_hardcap90_lam1e+00_sine_and_readout/pgd_plan/eps64_n200.json",
+    "epsilon_255": 64
+  }
+]

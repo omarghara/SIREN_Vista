@@ -2,8 +2,17 @@
 
 # Full-PGD evaluation for ONE model only (no vanilla baseline).
 #
-# Same attack recipe as scripts/run_pgd_plan.sh, but you only set MODEL_SLUG
-# (and optional knobs). Paths follow the repo convention:
+# Same attack recipe as scripts/run_pgd_plan.sh, but for one model only.
+# In the common case you only set MODEL_SLUG. You can also override
+# MODEL_CKPT / MODEL_CLASS / PGD_OUT directly when the checkpoint directory
+# and run-artifact directory intentionally differ.
+#
+# Default is the hardcap90 run:
+#   SIREN checkpoint was saved before trainer.py --model-name existed, so it
+#   lives under model_mnist/softlip_L1_lam1e+00_sine_and_readout/.
+#   Classifier + outputs live under runs/softlip_hardcap90_lam1e+00_sine_and_readout/.
+#
+# Generic path convention:
 #   SIREN:     model_mnist/${MODEL_SLUG}/modSiren.pth
 #   classifier runs/${MODEL_SLUG}/mnist_classifier/best_classifier.pth
 #   outputs:   runs/${MODEL_SLUG}/pgd_plan/
@@ -20,26 +29,33 @@
 
 set -euo pipefail
 
-# ---- model (edit this) ------------------------------------------------------
-MODEL_SLUG="${MODEL_SLUG:-softlip_L30_lam1e+00_all_skip0}"
+# ---- model (edit these, or override from the shell) --------------------------
+MODEL_SLUG="${MODEL_SLUG:-softlip_hardcap90_lam1e+00_sine_and_readout}"
 
-MODEL_CKPT="model_mnist/${MODEL_SLUG}/modSiren.pth"
-MODEL_CLASS="runs/${MODEL_SLUG}/mnist_classifier/best_classifier.pth"
-PGD_OUT="runs/${MODEL_SLUG}/pgd_plan"
+DEFAULT_MODEL_CKPT="model_mnist/${MODEL_SLUG}/modSiren.pth"
+if [[ "${MODEL_SLUG}" == "softlip_hardcap90_lam1e+00_sine_and_readout" ]]; then
+    # This model was trained before --model-name was wired into trainer.py.
+    DEFAULT_MODEL_CKPT="model_mnist/softlip_L1_lam1e+00_sine_and_readout/modSiren.pth"
+fi
+
+MODEL_CKPT="${MODEL_CKPT:-${DEFAULT_MODEL_CKPT}}"
+MODEL_CLASS="${MODEL_CLASS:-runs/${MODEL_SLUG}/mnist_classifier/best_classifier.pth}"
+PGD_OUT="${PGD_OUT:-runs/${MODEL_SLUG}/pgd_plan}"
 
 # ---- knobs (same semantics as run_pgd_plan.sh) -------------------------------
-N_MAIN=500
-N_SWEEP=200
-MAIN_EPS=16
-SWEEP_EPS=(8 32 64)
+N_MAIN="${N_MAIN:-500}"
+N_SWEEP="${N_SWEEP:-200}"
+MAIN_EPS="${MAIN_EPS:-16}"
+SWEEP_EPS_STR="${SWEEP_EPS_STR:-8 32 64}"
+read -r -a SWEEP_EPS <<< "${SWEEP_EPS_STR}"
 
-PGD_STEPS=100
-PGD_MOD_STEPS=10
-PGD_LR=0.01
-PGD_INNER_LR=0.01
-SEED=0
+PGD_STEPS="${PGD_STEPS:-100}"
+PGD_MOD_STEPS="${PGD_MOD_STEPS:-10}"
+PGD_LR="${PGD_LR:-0.01}"
+PGD_INNER_LR="${PGD_INNER_LR:-0.01}"
+SEED="${SEED:-0}"
 
-CUDA_GPU=1
+CUDA_GPU="${CUDA_GPU:-1}"
 
 # -----------------------------------------------------------------------------
 source /home/omarg/miniforge3/etc/profile.d/conda.sh

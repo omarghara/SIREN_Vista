@@ -137,9 +137,11 @@ def get_args():
                              'epoch counter, and best_loss.')
     parser.add_argument('--variant', choices=variants.available(), default='vanilla',
                         help='SIREN variant to train.')
-    parser.add_argument('--run-name', type=str, default=None,
+    parser.add_argument('--model-name', '--run-name', dest='model_name',
+                        type=str, default=None,
                         help='Optional subdirectory name override under '
-                             'model_{dataset}/. Defaults to the variant slug.')
+                             'model_{dataset}/. Defaults to the variant slug. '
+                             '--run-name is kept as a backwards-compatible alias.')
     parser.add_argument('--log-sigmas-every', type=int, default=0,
                         help='If > 0, print per-layer spectral norms every N '
                              'outer batches. Useful for calibrating soft-Lipschitz '
@@ -193,8 +195,8 @@ if __name__ == '__main__':
         print(f"[resume] loaded '{args.resume}' at epoch {start_epoch-1}, "
               f"best_loss={best_loss:.6f}")
 
-    if args.run_name is not None:
-        run_slug = args.run_name
+    if args.model_name is not None:
+        run_slug = args.model_name
     else:
         run_slug = variants.slug(args.variant, args)
     savedir = f"model_{args.dataset}/{run_slug}" if run_slug else f"model_{args.dataset}"
@@ -213,6 +215,7 @@ if __name__ == '__main__':
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': best_loss,
                         'variant': args.variant,
+                        'model_name': run_slug,
                         'variant_args': variants._extract_variant_args(args, args.variant),
                         'model_args': {
                             'dataset': args.dataset,

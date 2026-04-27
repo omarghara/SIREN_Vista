@@ -95,50 +95,122 @@ class SoftLipschitz:
         return slug
 
 
+# def _collect_layers(model, mode, L, skip_first=False):
+#     """Return list of ``(nn.Linear, sigma_cap)`` pairs to penalize.
+
+#     ``L`` is the per-layer Lipschitz budget. Caps are derived per layer:
+
+#     * ``SineAffine.affine``         -> cap = L / layer.freq
+#     * ``SIREN.hidden2rgb``          -> cap = L
+#     * ``ModulatedSIREN(3D).modul``  -> cap = L / sine_freq
+#       (fallback 30.0 if no SineAffine is found to read ``freq`` from).
+
+#     ``sine_only``        -> SineAffine.affine layers only.
+#     ``sine_and_readout`` -> + SIREN.hidden2rgb.
+#     ``all``              -> + ModulatedSIREN(.3D).modul.
+
+#     If ``skip_first`` is True the first ``SineAffine`` encountered (the
+#     coordinate-input layer, sine.0) is omitted from the returned list.
+#     ``sine_freq`` is still read from it so downstream cap derivations are
+#     unchanged.
+#     """
+#     pairs = []
+#     sine_freq = None
+#     seen_first_sine = False
+#     for m in model.modules():
+#         if isinstance(m, SineAffine):
+#             if sine_freq is None:
+#                 sine_freq = m.freq
+#             if skip_first and not seen_first_sine:
+#                 pairs.append((m.affine, 4 / m.freq))
+
+#                 seen_first_sine = True
+#                 continue
+#             seen_first_sine = True
+#             pairs.append((m.affine, L / m.freq))
+
+#     if mode in ("sine_and_readout", "all"):
+#         siren = getattr(model, "siren", None)
+#         if siren is not None and hasattr(siren, "hidden2rgb"):
+#             pairs.append((siren.hidden2rgb, L))
+
+#     if mode == "all":
+#         if isinstance(model, (ModulatedSIREN, ModulatedSIREN3D)):
+#             modul_freq = sine_freq if sine_freq is not None else 30.0
+#             pairs.append((model.modul, L / modul_freq))
+
+#     return pairs
+
+
 def _collect_layers(model, mode, L, skip_first=False):
-    """Return list of ``(nn.Linear, sigma_cap)`` pairs to penalize.
+    """Return list of (nn.Linear, sigma_cap) pairs to penalize.
 
-    ``L`` is the per-layer Lipschitz budget. Caps are derived per layer:
+    HARD-CODED EXPERIMENT:
+    This version ignores the global L for SIREN layers and instead uses
+    per-layer spectral-norm caps derived from the vanilla MNIST model.
 
-    * ``SineAffine.affine``         -> cap = L / layer.freq
-    * ``SIREN.hidden2rgb``          -> cap = L
-    * ``ModulatedSIREN(3D).modul``  -> cap = L / sine_freq
-      (fallback 30.0 if no SineAffine is found to read ``freq`` from).
+    Goal:
+        Reduce each vanilla layer spectral bound by about 10%.
 
-    ``sine_only``        -> SineAffine.affine layers only.
-    ``sine_and_readout`` -> + SIREN.hidden2rgb.
-    ``all``              -> + ModulatedSIREN(.3D).modul.
+    Important:
+        - We penalize only SIREN weights:
+            sine.0, sine.1, ..., sine.9, readout
+        - We do NOT penalize the modulation matrix in this experiment.
+        - skip_first is ignored for now because we explicitly define sine.0 cap.
 
-    If ``skip_first`` is True the first ``SineAffine`` encountered (the
-    coordinate-input layer, sine.0) is omitted from the returned list.
-    ``sine_freq`` is still read from it so downstream cap derivations are
-    unchanged.
+    Vanilla measured sigma_1 values:
+        sine.0  = 4.982442
+        sine.1  = 0.092663
+        sine.2  = 0.094855
+        sine.3  = 0.092998
+        sine.4  = 0.093318
+        sine.5  = 0.097486
+        sine.6  = 0.105713
+        sine.7  = 0.119848
+        sine.8  = 0.124839
+        sine.9  = 0.125309
+        readout = 0.061992
+
+    Caps below are 90% of the vanilla values.
+    This is a mild 10% reduction target.
     """
+
+    # 10% reduction from vanilla sigma_1 values.
+    # These are RAW spectral norm caps, not effective freq*sigma caps.
+    hardcoded_sigma_caps = {
+        "sine.0": 4.982442 * 0.90,
+        "sine.1": 0.092663 * 0.90,
+        "sine.2": 0.094855 * 0.90,
+        "sine.3": 0.092998 * 0.90,
+        "sine.4": 0.093318 * 0.90,
+        "sine.5": 0.097486 * 0.90,
+        "sine.6": 0.105713 * 0.90,
+        "sine.7": 0.119848 * 0.90,
+        "sine.8": 0.124839 * 0.90,
+        "sine.9": 0.125309 * 0.90,
+        "readout": 0.061992 * 0.90,
+    }
+
     pairs = []
-    sine_freq = None
-    seen_first_sine = False
+
+    sine_idx = 0
     for m in model.modules():
         if isinstance(m, SineAffine):
-            if sine_freq is None:
-                sine_freq = m.freq
-            if skip_first and not seen_first_sine:
-                seen_first_sine = True
-                continue
-            seen_first_sine = True
-            pairs.append((m.affine, L / m.freq))
+            layer_name = f"sine.{sine_idx}"
 
+            if layer_name in hardcoded_sigma_caps:
+                pairs.append((m.affine, hardcoded_sigma_caps[layer_name]))
+
+            sine_idx += 1
+
+    # Penalize readout because it is a SIREN weight.
+    # Do not penalize modul in this experiment.
     if mode in ("sine_and_readout", "all"):
         siren = getattr(model, "siren", None)
         if siren is not None and hasattr(siren, "hidden2rgb"):
-            pairs.append((siren.hidden2rgb, L))
-
-    if mode == "all":
-        if isinstance(model, (ModulatedSIREN, ModulatedSIREN3D)):
-            modul_freq = sine_freq if sine_freq is not None else 30.0
-            pairs.append((model.modul, L / modul_freq))
+            pairs.append((siren.hidden2rgb, hardcoded_sigma_caps["readout"]))
 
     return pairs
-
 
 @torch.no_grad()
 def _update_uv(lin, n_iter):
