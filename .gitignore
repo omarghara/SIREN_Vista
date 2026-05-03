@@ -19,3 +19,10 @@ env/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Large generated artifacts — keep local, never commit
+runs/**/functaset/
+model_mnist/
+model_cifar10/
+*.pth
+*.pkl
