@@ -110,7 +110,7 @@ def get_args():
     parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate introduced in classifier optimization')
     parser.add_argument('--cdepth', type=int, default=3, help='classifier MLP depth')
     parser.add_argument('--batch-size',type=int,default=256, help='optimization mini-batch size')
-    parser.add_argument('--dataset', choices=["mnist", "fmnist","modelnet"], help="Train for MNIST or Fashion-MNIST or ModelNet10")
+    parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
     parser.add_argument('--num-epochs', type=int, default=160, help='number of classifier training epochs')
     parser.add_argument('--data-path', type=str, default='..', help='path to MNIST or FMNIST dataset')
     parser.add_argument('--functaset-path-train', type=str, help='path to optimized training Functaset')

@@ -1,5 +1,5 @@
 import torch
-from torchvision.datasets import MNIST, FashionMNIST
+from torchvision.datasets import CIFAR10, MNIST, FashionMNIST
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as T
 import joblib
@@ -28,6 +28,30 @@ def get_mnist_loader(
     :return: Dataloader.
     """
     dataset = (FashionMNIST if fashion else MNIST)(root=root, train=train, download=True, transform=transform)
+    dataloader = DataLoader(
+        dataset, batch_size, shuffle=train, num_workers=num_workers, pin_memory=pin_memory
+    )
+    return dataloader
+
+
+def get_cifar10_loader(
+        root='../data',
+        train=True,
+        batch_size=64,
+        transform=T.ToTensor(),
+        num_workers=4,
+        pin_memory=True,
+):
+    """
+    :param root:
+    :param train:
+    :param batch_size:
+    :param transform:
+    :param num_workers:
+    :param pin_memory:
+    :return: CIFAR-10 dataloader with images shaped (3, 32, 32).
+    """
+    dataset = CIFAR10(root=root, train=train, download=True, transform=transform)
     dataloader = DataLoader(
         dataset, batch_size, shuffle=train, num_workers=num_workers, pin_memory=pin_memory
     )

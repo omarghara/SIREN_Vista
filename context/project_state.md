@@ -110,9 +110,47 @@ Standalone script that **re-fits** modulations on train/test and reports MSE, PS
 - Wired as Step 4/4 of [SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh](SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh); bash knobs: `EVAL_ITERS`, `EVAL_MAX_SAMPLES` (default 2000 per split — set blank for full eval).
 - See `CHANGES.md` §8 for the full design rationale, citing [SIREN paper](https://arxiv.org/abs/2006.09661) and [Functa paper](https://arxiv.org/abs/2201.12204).
 
+### CIFAR-10 + INR backbone choice
+
+CIFAR-10 is now partially wired into the functa stack as RGB `32x32` images:
+
+- `dataloader.py`: `get_cifar10_loader(...)`.
+- `SIREN.py`: 2D SIREN supports `out_features=3`.
+- `trainer.py`, `makeset.py`, `train_classifier.py`, `evaluate_reconstruction.py`: accept `dataset=cifar10`.
+
+New INR-backbone CLI:
+
+```bash
+--inr-type siren
+--inr-type fourier_siren
+--fourier-num-freqs 64
+--fourier-sigma 10.0
+--fourier-include-input
+```
+
+`fourier_siren` is implemented as `coords -> FourierFeatureEncoding -> SineAffine stack -> hidden2rgb`, while preserving the same modulation-vector mechanism (`phi -> modul -> per-layer shifts`). Fourier matrix `B` is a registered buffer, not trainable.
+
+Critical loading fix: `makeset.py` and `evaluate_reconstruction.py` now read checkpoint `model_args` and rebuild the exact model architecture before loading weights. This prevents the previous CIFAR-big failure where a `512/1024` checkpoint was loaded into a default `256/512` model.
+
+Current CIFAR scripts:
+
+- `scripts/run_soft_cifar10.sh`: small vanilla CIFAR-10 baseline, despite the legacy filename.
+- `scripts/run_vanilla_cifar10_big.sh`: larger vanilla CIFAR-10 run (`hidden_dim=512`, `mod_dim=1024`, `makeset_iters=50`); defaults to `SKIP_STEP1=1` for continuing from an existing checkpoint.
+- `scripts/run_fourier_cifar10.sh`: first controlled Fourier-SIREN CIFAR-10 experiment (`hidden_dim=256`, `mod_dim=512`, `depth=10`, `num_freqs=64`, `sigma=10`, `epochs=5`, `makeset_iters=20`).
+
+Notebook:
+
+- `notebooks/model_reconstruction_tsne_perturbation_cifar10.ipynb`: CIFAR reconstruction / t-SNE / perturbation diagnostics, plus an added cell for the big vanilla CIFAR run.
+
 ### Verification
 
 Smoke-tested on CPU with a small `ModulatedSIREN(depth=4)`: vanilla penalty = 0, soft-Lipschitz penalty flows gradients to every `SineAffine.affine.weight`, layer selection hits 4 / 5 / 6 for the three modes, slugs format correctly. `--help` on both trainer and makeset shows the variant arg group cleanly. `evaluate_reconstruction.py` smoke-tested on 8 MNIST samples against a synthetic tiny checkpoint: produces PSNR ~10 dB (random-output baseline), monotonically decreasing MSE across iter snapshots, and a well-formed JSON summary.
+
+Latest verification for CIFAR/Fourier work:
+
+- Python compile passed for `SIREN.py`, `trainer.py`, `makeset.py`, `evaluate_reconstruction.py`.
+- Fourier-SIREN smoke test produced RGB output `(1024, 3)` and batched eval output `(B, 1024, 3)`.
+- Checkpoint rebuild smoke test verified that `makeset.py` / `evaluate_reconstruction.py` override CLI defaults from checkpoint `model_args` and correctly rebuild `fourier_siren`.
 
 ## 5. What has NOT been built yet
 

@@ -323,3 +323,69 @@ This informs the follow-up sweep.
 4. Add an entry to `_extract_variant_args`'s `prefix_map` in `variants/__init__.py` so saved checkpoints contain a compact record of the variant's flags.
 
 No changes to `trainer.py` or `makeset.py` are needed unless the variant reshapes `state_dict` keys in a way that requires custom load logic.
+
+## 13. CIFAR-10 support and Fourier-SIREN INR backbone
+
+**Files.** `SIREN_Vista/{SIREN.py,dataloader.py,trainer.py,makeset.py,train_classifier.py,evaluate_reconstruction.py}` and `SIREN_Vista/scripts/{run_soft_cifar10.sh,run_vanilla_cifar10_big.sh,run_fourier_cifar10.sh}`.
+
+Added CIFAR-10 as a 2D RGB dataset path:
+
+- `dataloader.py` now has `get_cifar10_loader(...)`.
+- `SIREN.py`'s 2D SIREN path supports `out_features=3`, so CIFAR targets are `(32*32, 3)` rather than grayscale `(H*W, 1)`.
+- `trainer.py`, `makeset.py`, and `evaluate_reconstruction.py` accept `dataset=cifar10`.
+- `evaluate_reconstruction.py` computes RGB MSE/PSNR over all channels and RGB SSIM by averaging per-channel SSIM.
+
+Added an INR-backbone choice separate from the `variants/` regularization system:
+
+```bash
+--inr-type siren
+--inr-type fourier_siren
+--fourier-num-freqs 64
+--fourier-sigma 10.0
+--fourier-include-input
+```
+
+New classes in `SIREN.py`:
+
+- `FourierFeatureEncoding`: fixed random Gaussian Fourier basis with registered buffer `fourier.B`, mapping `(x,y)` to `[sin(2πBx), cos(2πBx)]`, optionally concatenating raw coordinates.
+- `ModulatedFourierSIREN`: same modulation mechanism as `ModulatedSIREN` (`phi -> modul -> per-layer SIREN shifts`), but the coordinate path is `coords -> FourierFeatureEncoding -> SineAffine stack -> hidden2rgb`.
+
+Checkpoint metadata now records INR provenance:
+
+```python
+model_args = {
+    "dataset": ...,
+    "hidden_dim": ...,
+    "mod_dim": ...,
+    "depth": ...,
+    "height": ...,
+    "width": ...,
+    "out_features": ...,
+    "inr_type": "siren" or "fourier_siren",
+    "fourier_num_freqs": ...,
+    "fourier_sigma": ...,
+    "fourier_include_input": ...,
+}
+```
+
+Important loading fix:
+
+- `makeset.py` now loads the checkpoint first, reads `checkpoint["model_args"]`, and rebuilds the exact architecture before `load_state_dict(...)`.
+- `evaluate_reconstruction.py` does the same and overrides CLI defaults from checkpoint metadata.
+- This fixes the previously observed failure where `run_vanilla_cifar10_big.sh` trained a `hidden_dim=512`, `mod_dim=1024` checkpoint but `makeset.py` rebuilt the default `256/512` model and hit a large `size mismatch` error.
+
+Script status:
+
+- `scripts/run_soft_cifar10.sh` was reduced to a vanilla-only CIFAR-10 pipeline for the first small CIFAR baseline.
+- `scripts/run_vanilla_cifar10_big.sh` now defaults to `SKIP_STEP1=1`, so it skips retraining if the big checkpoint already exists, passes architecture flags to `makeset.py` / eval, and saves functaset pickles under the run slug via `--functaset-stem`.
+- `scripts/run_fourier_cifar10.sh` is the first Fourier-SIREN CIFAR experiment: `hidden_dim=256`, `mod_dim=512`, `depth=10`, `fourier_num_freqs=64`, `fourier_sigma=10.0`, `epochs=5`, `makeset_iters=20`.
+
+Verification performed:
+
+- Python compile passed for modified files.
+- `bash -n scripts/run_fourier_cifar10.sh` passed after normalizing CRLF line endings.
+- Smoke tests confirmed:
+  - `ModulatedFourierSIREN(height=32,width=32,out_features=3)` outputs `(1024, 3)`.
+  - `fourier.B` is saved in the state dict.
+  - `evaluate_reconstruction.batched_forward(...)` works for Fourier-SIREN and RGB output.
+  - `makeset.py` / `evaluate_reconstruction.py` can rebuild a Fourier-SIREN from checkpoint `model_args`.

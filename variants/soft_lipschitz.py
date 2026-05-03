@@ -141,54 +141,127 @@ class SoftLipschitz:
 
 #     return pairs
 
+# 90 harcap experiment
+# def _collect_layers(model, mode, L, skip_first=False):
+#     """Return list of (nn.Linear, sigma_cap) pairs to penalize.
+
+#     HARD-CODED EXPERIMENT:
+#     This version ignores the global L for SIREN layers and instead uses
+#     per-layer spectral-norm caps derived from the vanilla MNIST model.
+
+#     Goal:
+#         Reduce each vanilla layer spectral bound by about 10%.
+
+#     Important:
+#         - We penalize only SIREN weights:
+#             sine.0, sine.1, ..., sine.9, readout
+#         - We do NOT penalize the modulation matrix in this experiment.
+#         - skip_first is ignored for now because we explicitly define sine.0 cap.
+
+#     Vanilla measured sigma_1 values:
+#         sine.0  = 4.982442
+#         sine.1  = 0.092663
+#         sine.2  = 0.094855
+#         sine.3  = 0.092998
+#         sine.4  = 0.093318
+#         sine.5  = 0.097486
+#         sine.6  = 0.105713
+#         sine.7  = 0.119848
+#         sine.8  = 0.124839
+#         sine.9  = 0.125309
+#         readout = 0.061992
+
+#     Caps below are 90% of the vanilla values.
+#     This is a mild 10% reduction target.
+#     """
+
+#     # 10% reduction from vanilla sigma_1 values.
+#     # These are RAW spectral norm caps, not effective freq*sigma caps.
+#     hardcoded_sigma_caps = {
+#         "sine.0": 4.982442 * 0.90,
+#         "sine.1": 0.092663 * 0.90,
+#         "sine.2": 0.094855 * 0.90,
+#         "sine.3": 0.092998 * 0.90,
+#         "sine.4": 0.093318 * 0.90,
+#         "sine.5": 0.097486 * 0.90,
+#         "sine.6": 0.105713 * 0.90,
+#         "sine.7": 0.119848 * 0.90,
+#         "sine.8": 0.124839 * 0.90,
+#         "sine.9": 0.125309 * 0.90,
+#         "readout": 0.061992 * 0.90,
+#     }
+
+#     pairs = []
+
+#     sine_idx = 0
+#     for m in model.modules():
+#         if isinstance(m, SineAffine):
+#             layer_name = f"sine.{sine_idx}"
+
+#             if layer_name in hardcoded_sigma_caps:
+#                 pairs.append((m.affine, hardcoded_sigma_caps[layer_name]))
+
+#             sine_idx += 1
+
+#     # Penalize readout because it is a SIREN weight.
+#     # Do not penalize modul in this experiment.
+#     if mode in ("sine_and_readout", "all"):
+#         siren = getattr(model, "siren", None)
+#         if siren is not None and hasattr(siren, "hidden2rgb"):
+#             pairs.append((siren.hidden2rgb, hardcoded_sigma_caps["readout"]))
+
+#     return pairs
+
 
 def _collect_layers(model, mode, L, skip_first=False):
     """Return list of (nn.Linear, sigma_cap) pairs to penalize.
 
     HARD-CODED EXPERIMENT:
-    This version ignores the global L for SIREN layers and instead uses
-    per-layer spectral-norm caps derived from the vanilla MNIST model.
+    first95_rest80
 
-    Goal:
-        Reduce each vanilla layer spectral bound by about 10%.
+    Caps:
+        sine.0       = 95% of vanilla sigma_1
+        sine.1-9     = 80% of vanilla sigma_1
+        readout      = 80% of vanilla sigma_1
+        modul        = not capped
 
     Important:
-        - We penalize only SIREN weights:
-            sine.0, sine.1, ..., sine.9, readout
-        - We do NOT penalize the modulation matrix in this experiment.
-        - skip_first is ignored for now because we explicitly define sine.0 cap.
-
-    Vanilla measured sigma_1 values:
-        sine.0  = 4.982442
-        sine.1  = 0.092663
-        sine.2  = 0.094855
-        sine.3  = 0.092998
-        sine.4  = 0.093318
-        sine.5  = 0.097486
-        sine.6  = 0.105713
-        sine.7  = 0.119848
-        sine.8  = 0.124839
-        sine.9  = 0.125309
-        readout = 0.061992
-
-    Caps below are 90% of the vanilla values.
-    This is a mild 10% reduction target.
+        - Sine caps are raw sigma(W) caps.
+        - Readout cap is raw sigma(W) cap.
+        - Modul is intentionally not included.
     """
 
-    # 10% reduction from vanilla sigma_1 values.
-    # These are RAW spectral norm caps, not effective freq*sigma caps.
+    vanilla_sigmas = {
+        "sine.0": 4.982442,
+        "sine.1": 0.092663,
+        "sine.2": 0.094855,
+        "sine.3": 0.092998,
+        "sine.4": 0.093318,
+        "sine.5": 0.097486,
+        "sine.6": 0.105713,
+        "sine.7": 0.119848,
+        "sine.8": 0.124839,
+        "sine.9": 0.125309,
+        "readout": 0.061992,
+    }
+
     hardcoded_sigma_caps = {
-        "sine.0": 4.982442 * 0.90,
-        "sine.1": 0.092663 * 0.90,
-        "sine.2": 0.094855 * 0.90,
-        "sine.3": 0.092998 * 0.90,
-        "sine.4": 0.093318 * 0.90,
-        "sine.5": 0.097486 * 0.90,
-        "sine.6": 0.105713 * 0.90,
-        "sine.7": 0.119848 * 0.90,
-        "sine.8": 0.124839 * 0.90,
-        "sine.9": 0.125309 * 0.90,
-        "readout": 0.061992 * 0.90,
+        # First coordinate-input sine layer: mild cap.
+        "sine.0": vanilla_sigmas["sine.0"] * 0.95,
+
+        # Hidden sine layers: stronger cap.
+        "sine.1": vanilla_sigmas["sine.1"] * 0.80,
+        "sine.2": vanilla_sigmas["sine.2"] * 0.80,
+        "sine.3": vanilla_sigmas["sine.3"] * 0.80,
+        "sine.4": vanilla_sigmas["sine.4"] * 0.80,
+        "sine.5": vanilla_sigmas["sine.5"] * 0.80,
+        "sine.6": vanilla_sigmas["sine.6"] * 0.80,
+        "sine.7": vanilla_sigmas["sine.7"] * 0.80,
+        "sine.8": vanilla_sigmas["sine.8"] * 0.80,
+        "sine.9": vanilla_sigmas["sine.9"] * 0.80,
+
+        # Readout: stronger cap.
+        "readout": vanilla_sigmas["readout"] * 0.80,
     }
 
     pairs = []
@@ -203,13 +276,12 @@ def _collect_layers(model, mode, L, skip_first=False):
 
             sine_idx += 1
 
-    # Penalize readout because it is a SIREN weight.
-    # Do not penalize modul in this experiment.
     if mode in ("sine_and_readout", "all"):
         siren = getattr(model, "siren", None)
         if siren is not None and hasattr(siren, "hidden2rgb"):
             pairs.append((siren.hidden2rgb, hardcoded_sigma_caps["readout"]))
 
+    # Do not cap modul in this experiment.
     return pairs
 
 @torch.no_grad()

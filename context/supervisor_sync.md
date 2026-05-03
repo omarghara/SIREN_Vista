@@ -89,6 +89,33 @@ Gap ~4 dB PSNR is **flat** through iters 5–200 → softlip has a **lower fidel
 
 At **init** with `apply_to=all`, `L=30`: `sine.1–9` and readout sit **below** cap; **`modul`** sits **above** \(L/\omega_0\) → penalty bites **modul** first. **End-of-training** \(\sigma\) audit on the saved `.pth` is still the right check that this remained the active bottleneck.
 
+### 3.4 CIFAR-10 scaling and Fourier-SIREN pivot
+
+We added CIFAR-10 support to the functa pipeline (`32x32` RGB output) and observed that the first small vanilla CIFAR SIREN baseline is weak relative to MNIST:
+
+- Reconstruction around **PSNR@200 ≈ 18.8 dB**.
+- Downstream classifier around **47% top-1**.
+
+This suggests the immediate CIFAR bottleneck is representation fidelity, not only robustness. A larger vanilla run (`scripts/run_vanilla_cifar10_big.sh`, `hidden_dim=512`, `mod_dim=1024`, `makeset_iters=50`) was prepared; a bug in `makeset.py` was found and fixed where checkpoint metadata was ignored and the default `256/512` model was rebuilt.
+
+New controlled representation experiment: **Fourier-SIREN**.
+
+- New INR flag: `--inr-type fourier_siren`.
+- Coordinate path: `(x,y) -> fixed Gaussian Fourier features -> SIREN`.
+- Modulation path unchanged: `phi -> modul -> per-layer shifts`; classifier still trains on `phi`.
+- Checkpoint metadata records `inr_type`, Fourier frequency count, sigma, include-input flag, image shape, output channels.
+- `makeset.py` and `evaluate_reconstruction.py` now rebuild from checkpoint `model_args`, preventing architecture mismatch.
+
+First script to run: `SIREN_Vista/scripts/run_fourier_cifar10.sh`:
+
+```text
+hidden_dim=256, mod_dim=512, depth=10
+fourier_num_freqs=64, fourier_sigma=10.0, include_input=False
+epochs=5, makeset_iters=20
+```
+
+Success criterion for this phase: improve CIFAR reconstruction over vanilla (`PSNR@200 > 20–21 dB` would be encouraging) and then check whether better reconstruction also improves modulation-space classifier accuracy beyond ~47%.
+
 ---
 
 ## 4. Interpretation
@@ -99,6 +126,8 @@ At **init** with `apply_to=all`, `L=30`: `sine.1–9` and readout sit **below** 
 
 **Not gradient-only obfuscation at a glance:** Attack success is material; \(\varepsilon\) sweep is not flat in a masking-like way — but stronger claims still want sweeps + (optional) transfer / black-box checks per `cursor_context.md`.
 
+**CIFAR interpretation:** Fourier-SIREN is not a thesis pivot; it is a controlled change of the INR representation while preserving the same parameter-space classification pipeline. The question remains how INR choice and regularization affect `phi` quality/stability and downstream robustness.
+
 ---
 
 ## 5. Open questions for supervisor
@@ -107,6 +136,7 @@ At **init** with `apply_to=all`, `L=30`: `sine.1–9` and readout sit **below** 
 2. **Further soft-Lipschitz work:** Tune **\(L\), \(\lambda\)** (including runs like **`L=0.5`** with `apply_to=all` where caps are very tight), or pivot toward **explicit `modul`-only** regularization / **hard spectral norm** / **modulation-stability** from the ideas list?
 3. **Evaluation depth:** Is **Full-PGD + \(\varepsilon\) sweep** enough for the defense chapter, or do we need **AutoAttack**, **Square/NES**, or **transfer** runs for an exam committee?
 4. **Datasets:** Stay **MNIST-only** until the defense story is frozen, or add Fashion-MNIST / ModelNet10 for one chosen variant?
+5. **CIFAR representation:** If Fourier-SIREN improves CIFAR reconstruction/classification, should the robustness chapter include it as the scalable INR baseline before revisiting soft-Lipschitz / hardcap regularization?
 
 ---
 
@@ -117,6 +147,7 @@ At **init** with `apply_to=all`, `L=30`: `sine.1–9` and readout sit **below** 
 3. **Optional ablations:** new softlip checkpoints (e.g. **`L=0.5`** pipeline already in `run_soft_lipschitz_mnist.sh`); compare PGD via `run_pgd_single_model.sh` or extend the comparison script.
 4. **Diagnostics notebook** on vanilla e40 + chosen softlip for the “where is sharpness / first layer scale” narrative (see `to_do/chat.md`).
 5. **If time:** one **transfer** or **black-box** sanity check; or **matched-clean** training (harder — only if reviewer angle requires it).
+6. **Run Fourier-SIREN CIFAR pilot** via `scripts/run_fourier_cifar10.sh`; compare `reconstruction_eval.json` and classifier accuracy against `vanilla_cifar10`.
 
 ---
 
@@ -132,11 +163,12 @@ At **init** with `apply_to=all`, `L=30`: `sine.1–9` and readout sit **below** 
 | Merged PGD summaries (when run) | `SIREN_Vista/runs/pgd_plan_summary.{md,json}` |
 | Per-model PGD JSON/log | `SIREN_Vista/runs/<slug>/pgd_plan/` |
 | Notebooks | `SIREN_Vista/notebooks/model_diagnostics.ipynb` |
-| Scripts | `SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh`, `run_pgd_plan.sh`, `run_pgd_single_model.sh` |
+| CIFAR diagnostics notebook | `SIREN_Vista/notebooks/model_reconstruction_tsne_perturbation_cifar10.ipynb` |
+| Scripts | `SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh`, `run_pgd_plan.sh`, `run_pgd_single_model.sh`, `run_vanilla_cifar10_big.sh`, `run_fourier_cifar10.sh` |
 | Ideas | `ideas/robustness_ideas.md` |
 
 ---
 
 ## 8. One-line summary for the meeting
 
-“We now have a **proper vanilla e40 baseline** and a **matched Full-PGD \(\varepsilon\) sweep**: vanilla **wins** robust accuracy at \(\varepsilon=8\) and **16**, softlip **wins** at **32** and **64** — so the thesis story is **nuanced**, not ‘softlip beats vanilla everywhere’; backbone recon still shows ~**4 dB** PSNR cost for softlip, and next I’m tightening the write-up plus an end-of-training **spectral audit** on the softlip checkpoint.”
+“We now have a **proper vanilla e40 baseline** and a **matched Full-PGD \(\varepsilon\) sweep**: vanilla **wins** robust accuracy at \(\varepsilon=8\) and **16**, softlip **wins** at **32** and **64** — so the thesis story is **nuanced**, not ‘softlip beats vanilla everywhere’. On CIFAR-10, vanilla SIREN reconstruction/classification is weak (~18.8 dB PSNR@200, ~47% top-1), so I added a controlled **Fourier-SIREN INR** path to test whether better coordinate features improve reconstruction and `phi` quality before revisiting robustness.”

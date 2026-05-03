@@ -6,6 +6,28 @@ import math
 class SinActivation(torch.nn.Module): #We use this to more easily create hooks and track activation patterns
     def forward(self, x):
         return torch.sin(x)
+
+
+class FourierFeatureEncoding(nn.Module):
+    def __init__(self, in_dim=2, num_freqs=64, sigma=10.0, include_input=False):
+        super().__init__()
+        B = torch.randn(num_freqs, in_dim) * sigma
+        self.register_buffer("B", B)
+        self.include_input = include_input
+
+    @property
+    def out_dim(self):
+        dim = 2 * self.B.shape[0]
+        if self.include_input:
+            dim += self.B.shape[1]
+        return dim
+
+    def forward(self, coords):
+        proj = 2.0 * math.pi * coords @ self.B.t()
+        feats = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+        if self.include_input:
+            feats = torch.cat([coords, feats], dim=-1)
+        return feats
         
 # Basic SIREN layers.
 class SineAffine(nn.Module):
@@ -70,7 +92,9 @@ class SIREN(nn.Module):
             num_layers: int,
             freq: float = 30.0,
             use_shift: bool = False,
-            voxel: bool = False
+            voxel: bool = False,
+            out_features: int = 1,
+            in_features: int = None,
     ):
         """
         :param hidden_features: the number of neurons in each hidden layer.
@@ -86,10 +110,12 @@ class SIREN(nn.Module):
         self.freq = freq
         self.use_shift = use_shift
         self.voxel = voxel
+        self.out_features = out_features
+        self.in_features = in_features if in_features is not None else (3 if voxel else 2)
         
         # Construct the layers.
         self.net = self._make_layers()
-        self.hidden2rgb = nn.Linear(hidden_features, 1, bias=True)
+        self.hidden2rgb = nn.Linear(hidden_features, out_features, bias=True)
         b = math.sqrt(6 / hidden_features) / freq
         nn.init.uniform_(self.hidden2rgb.weight, -b, b)
         nn.init.zeros_(self.hidden2rgb.bias)
@@ -98,7 +124,7 @@ class SIREN(nn.Module):
         assert self.num_layers > 0
         layers = []
         for i in range(self.num_layers):
-            in_features = (3 if self.voxel else 2) if i == 0 else self.hidden_features
+            in_features = self.in_features if i == 0 else self.hidden_features
             if self.use_shift:
                 layers.append(
                     SineAffine(
@@ -138,7 +164,8 @@ class ModulatedSIREN(nn.Module):
             num_layers: int,
             modul_features: int,
             freq: float = 30.0,
-            device='cuda'
+            device='cuda',
+            out_features: int = 1,
     ):
         """
         :param height: the height of input image.
@@ -153,6 +180,7 @@ class ModulatedSIREN(nn.Module):
         # Generate a mesh grid.
         self.height = height
         self.width = width
+        self.out_features = out_features
         x, y = torch.meshgrid(torch.arange(height), torch.arange(width))
         x = x.float().view(-1).unsqueeze(0).to(device)
         y = y.float().view(-1).unsqueeze(0).to(device)
@@ -164,6 +192,7 @@ class ModulatedSIREN(nn.Module):
             num_layers=num_layers,
             freq=freq,
             use_shift=True,
+            out_features=out_features,
         )
 
         # Modulation.
@@ -189,6 +218,70 @@ class ModulatedSIREN(nn.Module):
         shift = self.modul(phi)
         self.assign_shift(shift=shift)
         coord = self.meshgrid.clone()
+        out = self.siren(coord)
+        return out
+
+
+class ModulatedFourierSIREN(nn.Module):
+    def __init__(
+            self,
+            height: int,
+            width: int,
+            hidden_features: int,
+            num_layers: int,
+            modul_features: int,
+            freq: float = 30.0,
+            device='cuda',
+            out_features: int = 1,
+            fourier_num_freqs: int = 64,
+            fourier_sigma: float = 10.0,
+            fourier_include_input: bool = False,
+    ):
+        super(ModulatedFourierSIREN, self).__init__()
+
+        self.height = height
+        self.width = width
+        self.out_features = out_features
+        x, y = torch.meshgrid(torch.arange(height), torch.arange(width))
+        x = x.float().view(-1).unsqueeze(0).to(device)
+        y = y.float().view(-1).unsqueeze(0).to(device)
+        self.meshgrid = torch.cat((x, y), dim=0).T
+
+        self.fourier_num_freqs = fourier_num_freqs
+        self.fourier_sigma = fourier_sigma
+        self.fourier_include_input = fourier_include_input
+        self.fourier = FourierFeatureEncoding(
+            in_dim=2,
+            num_freqs=fourier_num_freqs,
+            sigma=fourier_sigma,
+            include_input=fourier_include_input,
+        )
+
+        self.siren = SIREN(
+            hidden_features=hidden_features,
+            num_layers=num_layers,
+            freq=freq,
+            use_shift=True,
+            out_features=out_features,
+            in_features=self.fourier.out_dim,
+        )
+
+        self.modul_features = modul_features
+        self.modul = nn.Linear(modul_features, hidden_features * num_layers)
+
+    def assign_shift(self, shift):
+        hidden_features = self.siren.hidden_features
+        assert shift.size(0) == hidden_features * self.siren.num_layers
+        i = 0
+        for layer in self.siren.net:
+            layer.shift = shift[i * hidden_features: (i + 1) * hidden_features]
+            i += 1
+
+    def forward(self, phi):
+        shift = self.modul(phi)
+        self.assign_shift(shift=shift)
+        coord = self.meshgrid.clone()
+        coord = self.fourier(coord)
         out = self.siren(coord)
         return out
         

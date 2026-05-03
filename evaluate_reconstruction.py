@@ -35,9 +35,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 from tqdm import tqdm
 
-from dataloader import get_mnist_loader
+from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedSIREN, ModulatedSIREN3D
+from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D
 from utils import set_random_seeds
 import variants
 
@@ -76,6 +76,21 @@ def ssim_2d_batch(fitted, target, window_size=11, sigma=1.5):
     num = (2 * mu_x * mu_y + C1) * (2 * sig_xy + C2)
     den = (mu_x.pow(2) + mu_y.pow(2) + C1) * (sig_x + sig_y + C2)
     return (num / den).mean(dim=(1, 2, 3))  # (B,)
+
+
+def ssim_image_batch(fitted, target, window_size=11, sigma=1.5):
+    """SSIM for grayscale or RGB image batches in [0, 1].
+
+    fitted, target: (B, C, H, W). RGB SSIM is averaged over channels.
+    """
+    if fitted.shape[1] == 1:
+        return ssim_2d_batch(fitted[:, 0], target[:, 0], window_size, sigma)
+
+    values = [
+        ssim_2d_batch(fitted[:, c], target[:, c], window_size, sigma)
+        for c in range(fitted.shape[1])
+    ]
+    return torch.stack(values, dim=1).mean(dim=1)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +136,7 @@ def batched_forward(model, phi_batch):
     B = phi_batch.shape[0]
     shift_all = model.modul(phi_batch)  # (B, hidden * num_layers)
     coord = model.meshgrid  # (N, in_dim); in_dim = 2 or 3
-    x = coord
+    x = model.fourier(coord) if hasattr(model, 'fourier') else coord
     for i in range(num_layers):
         layer = siren.net[i]
         x_lin = layer.affine(x)
@@ -148,27 +163,27 @@ def _loss_batch(fitted, target, voxels):
     w.r.t. its own modulator equals the gradient it would receive under
     single-image SGD / Adam / LBFGS -- per-image dynamics are preserved.
     """
-    f = fitted.squeeze(-1)  # (B, N)
-    t = target.squeeze(-1) if target.dim() == 3 else target
-    per_image_mse = ((f - t) ** 2).mean(dim=1)  # (B,)
+    f = fitted.squeeze(-1)
+    t = target.squeeze(-1) if target.dim() == 3 and target.shape[-1] == 1 else target
+    per_image_mse = ((f - t) ** 2).reshape(fitted.shape[0], -1).mean(dim=1)  # (B,)
     return per_image_mse.sum()
 
 
 def _metrics_batch(fitted, target, image_for_ssim, image_shape, voxels):
     """Per-image (mse_list, psnr_list, ssim_list_or_None), each length B.
 
-    SSIM (2D only) is computed batched via ssim_2d_batch. PSNR is derived
+    SSIM (2D only) is computed batched via ssim_image_batch. PSNR is derived
     directly from per-image MSE with data_range = 1.0.
     """
-    f = fitted.squeeze(-1)  # (B, N)
-    t = target.squeeze(-1) if target.dim() == 3 else target
-    mse_per = ((f - t) ** 2).mean(dim=1)  # (B,)
+    f = fitted.squeeze(-1)
+    t = target.squeeze(-1) if target.dim() == 3 and target.shape[-1] == 1 else target
+    mse_per = ((f - t) ** 2).reshape(fitted.shape[0], -1).mean(dim=1)  # (B,)
     psnr_per = 10.0 * torch.log10(1.0 / torch.clamp(mse_per, min=1e-12))
     if image_for_ssim is not None:
         B = fitted.shape[0]
-        H, W = image_shape
-        fitted_2d = f.view(B, H, W).clamp(0.0, 1.0)
-        ssim_list = ssim_2d_batch(fitted_2d, image_for_ssim).detach().cpu().numpy().tolist()
+        H, W, C = image_shape
+        fitted_2d = f.view(B, H, W, C).permute(0, 3, 1, 2).clamp(0.0, 1.0)
+        ssim_list = ssim_image_batch(fitted_2d, image_for_ssim).detach().cpu().numpy().tolist()
     else:
         ssim_list = None
     return (mse_per.detach().cpu().numpy().tolist(),
@@ -246,15 +261,15 @@ def _prep_image_batch(image_batch, voxels, device):
     """Move batch to device and return the shapes the fit loops expect.
 
     Returns:
-      image_for_loss: (B, HW, 1) for 2D, (B, HWD) for voxel.
-      image_for_ssim: (B, H, W) for 2D, None for voxel.
+      image_for_loss: (B, HW, C) for 2D, (B, HWD) for voxel.
+      image_for_ssim: (B, C, H, W) for 2D, None for voxel.
     """
     image_batch = image_batch.to(device, non_blocking=True)
     B = image_batch.shape[0]
     if voxels:
         return image_batch.reshape(B, -1), None
-    image_for_ssim = image_batch.squeeze(1)  # (B, H, W)
-    image_for_loss = image_for_ssim.reshape(B, -1).unsqueeze(-1)  # (B, HW, 1)
+    image_for_ssim = image_batch
+    image_for_loss = image_batch.permute(0, 2, 3, 1).reshape(B, -1, image_batch.shape[1])
     return image_for_loss, image_for_ssim
 
 
@@ -329,7 +344,7 @@ def get_args():
     )
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='Path to trained SIREN .pth file.')
-    parser.add_argument('--dataset', choices=['mnist', 'fmnist', 'modelnet'], required=True)
+    parser.add_argument('--dataset', choices=['mnist', 'fmnist', 'cifar10', 'modelnet'], required=True)
     parser.add_argument('--data-path', type=str, default='..')
     parser.add_argument('--hidden-dim', type=int, default=256,
                         help='Overridden by checkpoint.model_args if present.')
@@ -337,6 +352,14 @@ def get_args():
                         help='Overridden by checkpoint.model_args if present.')
     parser.add_argument('--depth', type=int, default=10,
                         help='Overridden by checkpoint.model_args if present.')
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren'], default='siren',
+                        help='Coordinate INR backbone type. Overridden by checkpoint.model_args if present.')
+    parser.add_argument('--fourier-num-freqs', type=int, default=64,
+                        help='Number of random Fourier frequencies for --inr-type fourier_siren.')
+    parser.add_argument('--fourier-sigma', type=float, default=10.0,
+                        help='Stddev of Gaussian Fourier frequency matrix B.')
+    parser.add_argument('--fourier-include-input', action='store_true', default=False,
+                        help='Concatenate raw (x,y) coordinates to Fourier features.')
     parser.add_argument('--device', type=str,
                         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=0)
@@ -371,9 +394,21 @@ def get_args():
 
 
 def _build_model(args, ckpt_model_args, device):
-    model_args = {'hidden_dim': args.hidden_dim, 'mod_dim': args.mod_dim, 'depth': args.depth}
+    model_args = {
+        'hidden_dim': args.hidden_dim,
+        'mod_dim': args.mod_dim,
+        'depth': args.depth,
+        'height': 32 if args.dataset == 'cifar10' else 28,
+        'width': 32 if args.dataset == 'cifar10' else 28,
+        'out_features': 3 if args.dataset == 'cifar10' else 1,
+        'inr_type': args.inr_type,
+        'fourier_num_freqs': args.fourier_num_freqs,
+        'fourier_sigma': args.fourier_sigma,
+        'fourier_include_input': args.fourier_include_input,
+    }
     if ckpt_model_args:
-        for k in ('hidden_dim', 'mod_dim', 'depth'):
+        for k in ('hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',
+                  'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input'):
             if k in ckpt_model_args and ckpt_model_args[k] != model_args[k]:
                 print(f"[eval] override --{k.replace('_','-')} "
                       f"{model_args[k]} -> {ckpt_model_args[k]} (from checkpoint.model_args)")
@@ -382,6 +417,8 @@ def _build_model(args, ckpt_model_args, device):
         print("[eval] checkpoint has no 'model_args'; using CLI --hidden-dim / --mod-dim / --depth.")
 
     if args.dataset == 'modelnet':
+        if model_args.get('inr_type', 'siren') != 'siren':
+            raise SystemExit("fourier_siren is currently supported for 2D image datasets only.")
         H, W, D = 15, 15, 15
         model = ModulatedSIREN3D(
             height=H, width=W, depth=D,
@@ -391,14 +428,28 @@ def _build_model(args, ckpt_model_args, device):
         )
         image_shape = (H, W, D)
     else:
-        model = ModulatedSIREN(
-            height=28, width=28,
-            hidden_features=model_args['hidden_dim'],
-            num_layers=model_args['depth'],
-            modul_features=model_args['mod_dim'],
-            device=device,
-        )
-        image_shape = (28, 28)
+        if model_args.get('inr_type', 'siren') == 'fourier_siren':
+            model = ModulatedFourierSIREN(
+                height=model_args['height'], width=model_args['width'],
+                hidden_features=model_args['hidden_dim'],
+                num_layers=model_args['depth'],
+                modul_features=model_args['mod_dim'],
+                device=device,
+                out_features=model_args['out_features'],
+                fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+                fourier_sigma=model_args.get('fourier_sigma', 10.0),
+                fourier_include_input=model_args.get('fourier_include_input', False),
+            )
+        else:
+            model = ModulatedSIREN(
+                height=model_args['height'], width=model_args['width'],
+                hidden_features=model_args['hidden_dim'],
+                num_layers=model_args['depth'],
+                modul_features=model_args['mod_dim'],
+                device=device,
+                out_features=model_args['out_features'],
+            )
+        image_shape = (model_args['height'], model_args['width'], model_args['out_features'])
     return model, model_args, image_shape
 
 
@@ -415,15 +466,25 @@ def _get_loaders(args):
                 train=False, batch_size=bs, resample_shape=(15, 15, 15),
             )
     else:
-        fashion = (args.dataset == 'fmnist')
-        if args.split in ('train', 'both'):
-            loaders['train'] = get_mnist_loader(
-                args.data_path, train=True, batch_size=bs, fashion=fashion,
-            )
-        if args.split in ('test', 'both'):
-            loaders['test'] = get_mnist_loader(
-                args.data_path, train=False, batch_size=bs, fashion=fashion,
-            )
+        if args.dataset == 'cifar10':
+            if args.split in ('train', 'both'):
+                loaders['train'] = get_cifar10_loader(
+                    args.data_path, train=True, batch_size=bs,
+                )
+            if args.split in ('test', 'both'):
+                loaders['test'] = get_cifar10_loader(
+                    args.data_path, train=False, batch_size=bs,
+                )
+        else:
+            fashion = (args.dataset == 'fmnist')
+            if args.split in ('train', 'both'):
+                loaders['train'] = get_mnist_loader(
+                    args.data_path, train=True, batch_size=bs, fashion=fashion,
+                )
+            if args.split in ('test', 'both'):
+                loaders['test'] = get_mnist_loader(
+                    args.data_path, train=False, batch_size=bs, fashion=fashion,
+                )
     return loaders
 
 
