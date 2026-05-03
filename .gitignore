@@ -20,9 +20,7 @@ env/
 .DS_Store
 Thumbs.db
 
-# Large generated artifacts — keep local, never commit
-runs/**/functaset/
-model_mnist/
-model_cifar10/
-*.pth
-*.pkl
+# Large binary artifacts are tracked via Git LFS (.gitattributes)
+# runs/**/functaset/*.pkl  -> LFS
+# model_mnist/**/*.pth     -> LFS
+# model_cifar10/**/*.pth   -> LFS
