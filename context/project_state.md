@@ -132,6 +132,8 @@ New INR-backbone CLI:
 
 Critical loading fix: `makeset.py` and `evaluate_reconstruction.py` now read checkpoint `model_args` and rebuild the exact model architecture before loading weights. This prevents the previous CIFAR-big failure where a `512/1024` checkpoint was loaded into a default `256/512` model.
 
+**Coordinate normalization (§14 of `CHANGES.md`):** Both `ModulatedSIREN` and `ModulatedFourierSIREN` now use pixel-centre normalised coordinates `(i+0.5)/H` / `(j+0.5)/W` in `[0,1]` instead of raw integer pixel indices. Implemented via shared helper `make_normalized_pixel_grid(H, W, device)`. New checkpoints record `"coord_normalization": "zero_one_pixel_centers"` in `model_args`. Any model trained before this change used unnormalized coordinates; comparison requires retraining.
+
 Current CIFAR scripts:
 
 - `scripts/run_soft_cifar10.sh`: small vanilla CIFAR-10 baseline, despite the legacy filename.

@@ -324,6 +324,34 @@ This informs the follow-up sweep.
 
 No changes to `trainer.py` or `makeset.py` are needed unless the variant reshapes `state_dict` keys in a way that requires custom load logic.
 
+## 14. Coordinate grid normalization (`SIREN.py` + `trainer.py` + `makeset.py` + `evaluate_reconstruction.py`)
+
+**Problem.** Both `ModulatedSIREN` and `ModulatedFourierSIREN` previously built their coordinate grids with raw pixel indices `torch.arange(H)` / `torch.arange(W)` (values 0, 1, …, H−1). For Fourier features this is harmful: random Fourier frequencies are sampled from `N(0, σ²)`, so the projection `2π · coords · B.T` gets very large and the sinusoidal features collapse. Even for plain SIREN it contradicts the From-Data-to-Functa convention of normalised coordinates.
+
+**Fix.** Added a module-level helper function `make_normalized_pixel_grid(height, width, device)` that produces pixel-centre normalised coordinates in `[0, 1]`:
+
+```python
+y_i = (i + 0.5) / H     (i = 0 … H−1)
+x_j = (j + 0.5) / W     (j = 0 … W−1)
+```
+
+Output shape is `(H*W, 2)` with columns `[x, y]`. Uses `torch.meshgrid` with `indexing="ij"` (try/except fallback for torch < 1.10). The helper is now used in both `ModulatedSIREN.__init__` and `ModulatedFourierSIREN.__init__`.
+
+**Validation (expected values):**
+
+| Dataset | shape | min | max |
+|---------|-------|-----|-----|
+| CIFAR-10 32×32 | `(1024, 2)` | ≈ 0.015625 | ≈ 0.984375 |
+| MNIST 28×28 | `(784, 2)` | ≈ 0.017857 | ≈ 0.982143 |
+
+**Checkpoint metadata.** `trainer.py` now records `"coord_normalization": "zero_one_pixel_centers"` in `model_args`. Old checkpoints without this key load normally.
+
+**Debug prints added:**
+- `makeset.py`: prints checkpoint path, `model_args`, built class name, `modul_features`, `hidden_features`, `coord_normalization`, and the shape of the first fitted `phi`.
+- `evaluate_reconstruction.py`: same set of prints after loading and building the model.
+
+**Backward compatibility.** Only new checkpoints contain `coord_normalization`. Loading old checkpoints is unaffected. The coordinate change is a training-time ablation; any checkpoint trained before this change used unnormalized coordinates and must be retrained for a fair comparison.
+
 ## 13. CIFAR-10 support and Fourier-SIREN INR backbone
 
 **Files.** `SIREN_Vista/{SIREN.py,dataloader.py,trainer.py,makeset.py,train_classifier.py,evaluate_reconstruction.py}` and `SIREN_Vista/scripts/{run_soft_cifar10.sh,run_vanilla_cifar10_big.sh,run_fourier_cifar10.sh}`.

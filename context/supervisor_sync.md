@@ -128,6 +128,8 @@ Success criterion for this phase: improve CIFAR reconstruction over vanilla (`PS
 
 **CIFAR interpretation:** Fourier-SIREN is not a thesis pivot; it is a controlled change of the INR representation while preserving the same parameter-space classification pipeline. The question remains how INR choice and regularization affect `phi` quality/stability and downstream robustness.
 
+**Coordinate normalization fix:** Both SIREN models now use pixel-centre normalised coordinates in `[0,1]` (helpers `make_normalized_pixel_grid`), matching the From-Data-to-Functa convention. For Fourier features this is critical — raw integer pixel indices would cause random Fourier phases to be much too large. All models must be retrained from scratch after this change for a fair comparison against any previous checkpoints.
+
 ---
 
 ## 5. Open questions for supervisor

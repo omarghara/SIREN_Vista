@@ -28,6 +28,7 @@ def _build_2d_model(args, height, width, out_features):
             modul_features=args.mod_dim,
             device=args.device,
             out_features=out_features,
+            freq=args.siren_freq,
             fourier_num_freqs=args.fourier_num_freqs,
             fourier_sigma=args.fourier_sigma,
             fourier_include_input=args.fourier_include_input,
@@ -42,6 +43,7 @@ def _build_2d_model(args, height, width, out_features):
         modul_features=args.mod_dim,
         device=args.device,
         out_features=out_features,
+        freq=args.siren_freq,
     )
 
 
@@ -168,6 +170,8 @@ def get_args():
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
+    parser.add_argument('--siren-freq', type=float, default=30.0,
+                        help='SIREN ω0 (angular frequency) in sin(ω0(·)); default 30.')
     parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
     parser.add_argument('--num-epochs', type=int, default=6, help='number of epochs for external optimization')
     parser.add_argument('--data-path', type=str, default='..', help='path to MNIST, FMNIST or ModelNet10 dataset')
@@ -276,6 +280,8 @@ if __name__ == '__main__':
                             'fourier_num_freqs': args.fourier_num_freqs,
                             'fourier_sigma': args.fourier_sigma,
                             'fourier_include_input': args.fourier_include_input,
+                            'freq': args.siren_freq,
+                            'coord_normalization': 'zero_one_pixel_centers',
                         },
                         }, f'{savedir}/modSiren.pth')
 

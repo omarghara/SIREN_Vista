@@ -360,6 +360,8 @@ def get_args():
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
+    parser.add_argument('--siren-freq', type=float, default=30.0,
+                        help='SIREN ω0; overridden by checkpoint model_args.freq if present.')
     parser.add_argument('--device', type=str,
                         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=0)
@@ -405,10 +407,11 @@ def _build_model(args, ckpt_model_args, device):
         'fourier_num_freqs': args.fourier_num_freqs,
         'fourier_sigma': args.fourier_sigma,
         'fourier_include_input': args.fourier_include_input,
+        'freq': args.siren_freq,
     }
     if ckpt_model_args:
         for k in ('hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',
-                  'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input'):
+                  'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input', 'freq'):
             if k in ckpt_model_args and ckpt_model_args[k] != model_args[k]:
                 print(f"[eval] override --{k.replace('_','-')} "
                       f"{model_args[k]} -> {ckpt_model_args[k]} (from checkpoint.model_args)")
@@ -436,6 +439,7 @@ def _build_model(args, ckpt_model_args, device):
                 modul_features=model_args['mod_dim'],
                 device=device,
                 out_features=model_args['out_features'],
+                freq=model_args.get('freq', 30.0),
                 fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
                 fourier_sigma=model_args.get('fourier_sigma', 10.0),
                 fourier_include_input=model_args.get('fourier_include_input', False),
@@ -448,6 +452,7 @@ def _build_model(args, ckpt_model_args, device):
                 modul_features=model_args['mod_dim'],
                 device=device,
                 out_features=model_args['out_features'],
+                freq=model_args.get('freq', 30.0),
             )
         image_shape = (model_args['height'], model_args['width'], model_args['out_features'])
     return model, model_args, image_shape
@@ -527,6 +532,13 @@ def main():
     model = model.to(device)
     model = variants.build(args.variant, model, args)
     model.load_state_dict(ckpt['state_dict'])
+
+    print("[eval] model_args:", model_args)
+    print("[eval] built model:", type(model).__name__)
+    print("[eval] modul_features:", getattr(model, "modul_features", None))
+    print("[eval] hidden_features:", getattr(getattr(model, "siren", None), "hidden_features", None))
+    print("[eval] coord_normalization:", model_args.get("coord_normalization"))
+
     # Freeze backbone; only the inner-loop modulator is optimized.
     for p in model.parameters():
         p.requires_grad_(False)

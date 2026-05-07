@@ -43,12 +43,17 @@ def create_functaset(
     modul_features = model.modul_features
     inner_criterion = nn.MSELoss().cuda() if torch.cuda.is_available() else nn.MSELoss()
     prog_bar = tqdm(data_loader, total=len(data_loader))
-    
+    _printed_phi_shape = False
+
     for image, label in prog_bar:
         
         image = image.squeeze().to(device) if voxels else _prep_2d_image(image[0], device)
         modulator = torch.zeros(modul_features).float().to(device)
         modulator.requires_grad = True
+
+        if not _printed_phi_shape:
+            print("[makeset] first phi shape:", modulator.shape)
+            _printed_phi_shape = True
         
         def closure():
             inner_optimizer.zero_grad()
@@ -127,6 +132,8 @@ def get_args():
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
+    parser.add_argument('--siren-freq', type=float, default=30.0,
+                        help='SIREN ω0; overridden by checkpoint model_args.freq if present.')
     parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
     parser.add_argument('--iters', type=int, default=100, help='number of optimization iterations per sample')
     parser.add_argument('--data-path', type=str, default='..', help='path to MNIST,FMNIST or ModelNet10 dataset')
@@ -161,6 +168,7 @@ def _model_args_from_checkpoint(args, ckpt):
         'fourier_num_freqs': args.fourier_num_freqs,
         'fourier_sigma': args.fourier_sigma,
         'fourier_include_input': args.fourier_include_input,
+        'freq': args.siren_freq,
     }
     ckpt_model_args = ckpt.get('model_args', {}) or {}
     for key in model_args:
@@ -179,6 +187,7 @@ def _build_2d_model(model_args, device):
             modul_features=model_args['mod_dim'],
             device=device,
             out_features=model_args['out_features'],
+            freq=model_args.get('freq', 30.0),
             fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
             fourier_sigma=model_args.get('fourier_sigma', 10.0),
             fourier_include_input=model_args.get('fourier_include_input', False),
@@ -191,6 +200,7 @@ def _build_2d_model(model_args, device):
         modul_features=model_args['mod_dim'],
         device=device,
         out_features=model_args['out_features'],
+        freq=model_args.get('freq', 30.0),
     )
 
 
@@ -224,6 +234,14 @@ if __name__ == '__main__':
 
     modSiren = variants.build(args.variant, modSiren, args)
     modSiren.load_state_dict(pretrained['state_dict'])
+
+    print("[makeset] checkpoint:", args.checkpoint)
+    print("[makeset] model_args:", model_args)
+    print("[makeset] built model:", type(modSiren).__name__)
+    print("[makeset] modul_features:", getattr(modSiren, "modul_features", None))
+    print("[makeset] hidden_features:", getattr(getattr(modSiren, "siren", None), "hidden_features", None))
+    print("[makeset] coord_normalization:", model_args.get("coord_normalization"))
+
     functa_trainset = create_functaset(modSiren, dataloader_train, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet", lbfgs=args.lbfgs)
     functaset_stem = args.functaset_stem if args.functaset_stem is not None else args.dataset
     split(functa_trainset, name=functaset_stem, root=args.saveroot) #Split to training, validation and save split functaset

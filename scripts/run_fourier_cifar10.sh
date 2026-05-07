@@ -1,31 +1,55 @@
 #!/bin/bash
 
-# Fourier-SIREN CIFAR-10 pipeline:
+# Functa-like Fourier-SIREN CIFAR-10 pipeline:
 #   1. meta-train a ModulatedFourierSIREN backbone,
 #   2. create a CIFAR-10 functaset,
 #   3. train the downstream parameter-space classifier,
 #   4. evaluate reconstruction quality,
 #   5. skip PGD for now.
+#
+# This run assumes SIREN.py now uses normalized [0,1] pixel-center coordinates:
+#   x_j = (j + 0.5) / W
+#   y_i = (i + 0.5) / H
+#
+# Motivation:
+#   The stronger Functa-like vanilla SIREN was still blurry / low-frequency.
+#   This run keeps the Functa-like capacity and normalized coordinates,
+#   but adds Fourier features to help recover high-frequency details.
+#
+# Coordinate path:
+#   normalized (x,y)
+#      -> [x,y, sin(2πBv), cos(2πBv)] if FOURIER_INCLUDE_INPUT=1
+#      -> modulated SIREN
+#      -> RGB
 
 set -euo pipefail
 
 # ---- architecture ------------------------------------------------------------
 
-HIDDEN_DIM=256
+HIDDEN_DIM=512
 MOD_DIM=1024
-DEPTH=10
+DEPTH=15
 
 INR_TYPE=fourier_siren
+COORD_TAG="norm01"
+
 FOURIER_NUM_FREQS=64
-FOURIER_SIGMA=10.0
+FOURIER_SIGMA=5.0
 FOURIER_INCLUDE_INPUT=1
+
+# SIREN hidden-layer ω0 (same as Modulated*SIREN ``freq``; default in code is 30).
+SIREN_FREQ=90
 
 # ---- training hyperparameters ------------------------------------------------
 
-EPOCHS=7
+EPOCHS=10
 INT_LR=0.01
-EXT_LR=5e-5
-TRAIN_BATCH_SIZE=128
+
+# Functa used a very small outer LR (~3e-6).
+# 1e-5 is a practical middle point for this CIFAR test.
+EXT_LR=1e-5
+
+TRAIN_BATCH_SIZE=32
 
 MAKESET_ITERS=50
 
@@ -40,30 +64,42 @@ RUN_PGD=0
 
 # ---- classifier hyperparameters ---------------------------------------------
 
+# Slightly stronger classifier because MOD_DIM=1024 and CIFAR is harder.
 CLF_LR=0.01
-CLF_WIDTH=512
-CLF_DEPTH=3
-CLF_DROPOUT=0.2
+CLF_WIDTH=1024
+CLF_DEPTH=4
+CLF_DROPOUT=0.3
 CLF_BATCH_SIZE=256
-CLF_EPOCHS=40
+CLF_EPOCHS=80
 
 # -----------------------------------------------------------------------------
 
+EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
 SIGMA_TAG=$(printf "%g" "${FOURIER_SIGMA}" | tr '.' 'p')
-SLUG="fourier_siren_cifar10_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_nf${FOURIER_NUM_FREQS}_sig${SIGMA_TAG}_e${EPOCHS}_make${MAKESET_ITERS}"
+
+if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
+    INPUT_TAG="rawxy"
+else
+    INPUT_TAG="norawxy"
+fi
+
+W0_TAG=$(printf "%g" "${SIREN_FREQ}" | tr '.' 'p')
+
+SLUG="functa_like_cifar10_fourier_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_nf${FOURIER_NUM_FREQS}_sig${SIGMA_TAG}_${INPUT_TAG}_${COORD_TAG}_w0${W0_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_make${MAKESET_ITERS}"
 
 VARIANT_FLAGS=(
     --variant vanilla
 )
 
-FOURIER_FLAGS=(
+INR_FLAGS=(
     --inr-type "${INR_TYPE}"
     --fourier-num-freqs "${FOURIER_NUM_FREQS}"
     --fourier-sigma "${FOURIER_SIGMA}"
+    --siren-freq "${SIREN_FREQ}"
 )
 
 if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
-    FOURIER_FLAGS+=(--fourier-include-input)
+    INR_FLAGS+=(--fourier-include-input)
 fi
 
 MODEL_DIR="model_cifar10/${SLUG}"
@@ -77,19 +113,23 @@ export CUDA_VISIBLE_DEVICES="${CUDA_GPU}"
 
 cd ~/SIREN_Vista || exit 1
 
-echo "== Fourier-SIREN CIFAR-10 pipeline =="
+echo "== Functa-like Fourier-SIREN CIFAR-10 pipeline =="
 echo "   dataset       = cifar10"
 echo "   inr_type      = ${INR_TYPE}"
 echo "   hidden_dim    = ${HIDDEN_DIM}"
 echo "   mod_dim       = ${MOD_DIM}"
 echo "   depth         = ${DEPTH}"
+echo "   coord norm    = ${COORD_TAG} pixel centers"
 echo "   fourier freqs = ${FOURIER_NUM_FREQS}"
 echo "   fourier sigma = ${FOURIER_SIGMA}"
-echo "   include input = ${FOURIER_INCLUDE_INPUT}"
+echo "   include input = ${FOURIER_INCLUDE_INPUT} (${INPUT_TAG})"
+echo "   siren ω0      = ${SIREN_FREQ}"
 echo "   int_lr        = ${INT_LR}"
 echo "   ext_lr        = ${EXT_LR}"
 echo "   epochs        = ${EPOCHS}"
+echo "   train batch   = ${TRAIN_BATCH_SIZE}"
 echo "   make iters    = ${MAKESET_ITERS}"
+echo "   classifier    = width ${CLF_WIDTH}, depth ${CLF_DEPTH}, dropout ${CLF_DROPOUT}, epochs ${CLF_EPOCHS}"
 echo "   slug          = ${SLUG}"
 echo "   CUDA device   = ${CUDA_VISIBLE_DEVICES}"
 echo "   checkpoint    = ${CHECKPOINT}"
@@ -100,7 +140,7 @@ echo
 python -c "import torch; print('cuda available:', torch.cuda.is_available()); print('visible gpus:', torch.cuda.device_count()); print('gpu name:', torch.cuda.get_device_name(0))"
 
 echo
-echo "Step 1/5: Training Fourier-SIREN CIFAR-10 backbone"
+echo "Step 1/5: Training Functa-like Fourier-SIREN CIFAR-10 backbone"
 echo "          -> ${CHECKPOINT}"
 
 python trainer.py \
@@ -114,7 +154,7 @@ python trainer.py \
     --hidden-dim "${HIDDEN_DIM}" \
     --mod-dim "${MOD_DIM}" \
     --depth "${DEPTH}" \
-    "${FOURIER_FLAGS[@]}" \
+    "${INR_FLAGS[@]}" \
     --model-name "${SLUG}" \
     "${VARIANT_FLAGS[@]}" \
     --log-sigmas-every "${LOG_SIGMAS_EVERY}"
@@ -150,6 +190,31 @@ if ckpt.get("model_name") != expected_model_name:
         file=sys.stderr,
     )
     sys.exit(1)
+
+model_args = ckpt.get("model_args", {})
+
+expected = {
+    "inr_type": "${INR_TYPE}",
+    "hidden_dim": ${HIDDEN_DIM},
+    "mod_dim": ${MOD_DIM},
+    "depth": ${DEPTH},
+    "fourier_num_freqs": ${FOURIER_NUM_FREQS},
+    "fourier_sigma": float("${FOURIER_SIGMA}"),
+    "fourier_include_input": bool(${FOURIER_INCLUDE_INPUT}),
+    "freq": float("${SIREN_FREQ}"),
+}
+
+for k, v in expected.items():
+    got = model_args.get(k)
+    print(f"  check {k}: got={got!r}, expected={v!r}")
+    if got != v:
+        print(f"WARNING: model_args[{k!r}] mismatch: got {got!r}, expected {v!r}")
+
+coord_norm = model_args.get("coord_normalization")
+if coord_norm is not None:
+    print("  coord_normalization:", coord_norm)
+else:
+    print("  WARNING: coord_normalization missing from checkpoint model_args")
 PYCKPT
 
 echo
@@ -167,6 +232,7 @@ python makeset.py \
     --saveroot "${RUN_ROOT}" \
     --device cuda \
     --functaset-stem "${SLUG}" \
+    "${INR_FLAGS[@]}" \
     "${VARIANT_FLAGS[@]}"
 
 echo
@@ -205,6 +271,7 @@ python evaluate_reconstruction.py \
     --dataset cifar10 \
     --data-path ../data \
     --device cuda \
+    "${INR_FLAGS[@]}" \
     "${VARIANT_FLAGS[@]}" \
     --iter-checkpoints "${EVAL_ITERS}" \
     --split both \

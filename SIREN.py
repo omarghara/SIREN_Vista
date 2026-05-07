@@ -8,6 +8,26 @@ class SinActivation(torch.nn.Module): #We use this to more easily create hooks a
         return torch.sin(x)
 
 
+def make_normalized_pixel_grid(height, width, device=None):
+    """Pixel-center normalized coordinates in [0, 1].
+
+    Returns tensor of shape (H*W, 2) with columns [x, y] where
+        x_j = (j + 0.5) / W   (horizontal, fast axis)
+        y_i = (i + 0.5) / H   (vertical, slow axis)
+    """
+    ys = (torch.arange(height, dtype=torch.float32) + 0.5) / height
+    xs = (torch.arange(width,  dtype=torch.float32) + 0.5) / width
+    try:
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    except TypeError:
+        # torch < 1.10 does not have indexing kwarg; default is "ij"
+        yy, xx = torch.meshgrid(ys, xs)
+    grid = torch.stack([xx.reshape(-1), yy.reshape(-1)], dim=-1)  # (H*W, 2)
+    if device is not None:
+        grid = grid.to(device)
+    return grid
+
+
 class FourierFeatureEncoding(nn.Module):
     def __init__(self, in_dim=2, num_freqs=64, sigma=10.0, include_input=False):
         super().__init__()
@@ -177,14 +197,11 @@ class ModulatedSIREN(nn.Module):
         """
         super(ModulatedSIREN, self).__init__()
 
-        # Generate a mesh grid.
+        # Generate a normalized pixel-center coordinate grid.
         self.height = height
         self.width = width
         self.out_features = out_features
-        x, y = torch.meshgrid(torch.arange(height), torch.arange(width))
-        x = x.float().view(-1).unsqueeze(0).to(device)
-        y = y.float().view(-1).unsqueeze(0).to(device)
-        self.meshgrid = torch.cat((x, y), dim=0).T
+        self.meshgrid = make_normalized_pixel_grid(height, width, device=device)
 
         # Construct the layers.
         self.siren = SIREN(
@@ -242,10 +259,7 @@ class ModulatedFourierSIREN(nn.Module):
         self.height = height
         self.width = width
         self.out_features = out_features
-        x, y = torch.meshgrid(torch.arange(height), torch.arange(width))
-        x = x.float().view(-1).unsqueeze(0).to(device)
-        y = y.float().view(-1).unsqueeze(0).to(device)
-        self.meshgrid = torch.cat((x, y), dim=0).T
+        self.meshgrid = make_normalized_pixel_grid(height, width, device=device)
 
         self.fourier_num_freqs = fourier_num_freqs
         self.fourier_sigma = fourier_sigma
