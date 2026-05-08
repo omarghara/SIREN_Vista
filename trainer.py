@@ -3,7 +3,13 @@ import torch.nn as nn
 import torch.optim as optim
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
+from SIREN import (
+    ModulatedFourierSIREN,
+    ModulatedSIREN,
+    ModulatedSIREN3D,
+    ModulatedFINER,
+    ModulatedFourierLSA,
+)
 from utils import adjust_learning_rate
 from tqdm import tqdm
 import os
@@ -32,6 +38,23 @@ def _build_2d_model(args, height, width, out_features):
             fourier_num_freqs=args.fourier_num_freqs,
             fourier_sigma=args.fourier_sigma,
             fourier_include_input=args.fourier_include_input,
+        )
+
+    if args.inr_type == 'fourier_lsa':
+        return ModulatedFourierLSA(
+            height=height,
+            width=width,
+            hidden_features=args.hidden_dim,
+            num_layers=args.depth,
+            modul_features=args.mod_dim,
+            device=args.device,
+            out_features=out_features,
+            fourier_num_freqs=args.fourier_num_freqs,
+            fourier_sigma=args.fourier_sigma,
+            fourier_include_input=args.fourier_include_input,
+            lsa_num_harmonics=args.lsa_num_harmonics,
+            lsa_init_scale=args.lsa_init_scale,
+            lsa_include_linear=not args.lsa_no_linear,
         )
 
     if args.inr_type == 'finer':
@@ -70,6 +93,7 @@ def fit(
         outer_criterion,
         epoch_id,
         inner_steps=3,
+        inner_optim='sgd',
         inner_lr=0.01,
         voxels=False,
         penalty_fn=None,
@@ -83,6 +107,7 @@ def fit(
     :param outer_criterion: Meta-learning training objective.
     :param epoch_id: Epoch number.
     :param inner_steps: Number of internal, per-sample optimization steps for INR optimization.
+    :param inner_optim: Optimizer for internal, per-sample optimization.
     :param inner_lr: Learn-rate for internal, per-sample optimization.
     :param voxels: whether to use 3d data (.e.g modelnet) or 2d
     :param penalty_fn: Optional callable (model -> scalar Tensor) whose value is
@@ -110,9 +135,15 @@ def fit(
         for batch_id in range(batch_size):
             modulator = torch.zeros(modul_features).float().to(device)
             modulator.requires_grad=True
-            inner_optimizer = (optim.Adam if voxels else optim.SGD)([modulator], lr=inner_lr)
+            if voxels:
+                inner_optimizer = optim.Adam([modulator], lr=inner_lr)
+            else:
+                if inner_optim == 'adam':
+                    inner_optimizer = optim.Adam([modulator], lr=inner_lr)
+                else:
+                    inner_optimizer = optim.SGD([modulator], lr=inner_lr)
+            
             # Inner Optimization.
-           
             for step in range(inner_steps):
                 # Inner optimizer step.
                 inner_optimizer.zero_grad()
@@ -178,8 +209,16 @@ def get_args():
     parser.add_argument('--hidden-dim', type=int, default=256, help='SIREN hidden dimension')
     parser.add_argument('--mod-dim', type=int, default=512, help='modulation dimension')
     parser.add_argument('--depth', type=int, default=10, help='SIREN depth')
-    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer'], default='siren',
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer', 'fourier_lsa'], default='siren',
                         help='Coordinate INR backbone type.')
+    parser.add_argument('--lsa-num-harmonics', type=int, default=8,
+                    help='Number of harmonics K in learnable spectral activation.')
+
+    parser.add_argument('--lsa-init-scale', type=float, default=1e-3,
+                        help='Initial std scale for learnable spectral activation coefficients.')
+
+    parser.add_argument('--lsa-no-linear', action='store_true', default=False,
+                        help='If set, remove the identity term u from LSA activation.')
     parser.add_argument('--fourier-num-freqs', type=int, default=64,
                         help='Number of random Fourier frequencies for --inr-type fourier_siren.')
     parser.add_argument('--fourier-sigma', type=float, default=10.0,
@@ -218,6 +257,8 @@ def get_args():
 
     parser.add_argument('--inner-steps', type=int, default=3,
                     help='Number of inner-loop phi adaptation steps during meta-training.')
+    parser.add_argument('--inner-optim', choices=['sgd', 'adam'], default='sgd',
+                    help='Optimizer for inner-loop phi adaptation during meta-training.')
     variants.add_all_variant_args(parser)
     return parser.parse_args()
 
@@ -282,7 +323,11 @@ if __name__ == '__main__':
     os.makedirs(savedir, exist_ok=True)
     for epoch in range(start_epoch, start_epoch + args.num_epochs):
         loss = fit(
-            modSiren, dataloader, optimizer, criterion, epoch, inner_steps=args.inner_steps,inner_lr=args.int_lr, voxels=args.dataset=='modelnet',
+            modSiren, dataloader, optimizer, criterion, epoch,
+            inner_steps=args.inner_steps,
+            inner_optim=args.inner_optim,
+            inner_lr=args.int_lr,
+            voxels=args.dataset=='modelnet',
             penalty_fn=penalty_fn,
             log_sigmas_every=args.log_sigmas_every,
         )
@@ -312,7 +357,12 @@ if __name__ == '__main__':
                             'finer_first_bias_scale': args.finer_first_bias_scale,
                             'finer_scale_req_grad': args.finer_scale_req_grad,
                             'coord_normalization': 'zero_one_pixel_centers',
-                            
+                            'inner_optim': args.inner_optim,
+                            'inner_lr': args.int_lr,
+                            'inner_steps': args.inner_steps,
+                            'lsa_num_harmonics': args.lsa_num_harmonics,
+                            'lsa_init_scale': args.lsa_init_scale,
+                            'lsa_include_linear': not args.lsa_no_linear,
                         },
                         }, f'{savedir}/modSiren.pth')
 

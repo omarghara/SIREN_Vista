@@ -3,7 +3,13 @@ import torch.nn as nn
 import torch.optim as optim
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
+from SIREN import (
+    ModulatedFourierSIREN,
+    ModulatedSIREN,
+    ModulatedSIREN3D,
+    ModulatedFINER,
+    ModulatedFourierLSA,
+)
 from utils import adjust_learning_rate
 from tqdm import tqdm
 import os
@@ -26,7 +32,8 @@ def create_functaset(
         inner_steps=100,
         inner_lr=0.01,
         voxels=False,
-        lbfgs=False
+        lbfgs=False,
+        inner_optim='sgd',
 ):
     """
     :param model: INR model for which modulations are fitted.
@@ -70,7 +77,13 @@ def create_functaset(
             with torch.no_grad():
                 mse = torch.nn.MSELoss()(model(modulator),image).item()
         else:
-            inner_optimizer = (optim.Adam if voxels else optim.SGD)([modulator], lr=inner_lr)
+            if voxels:
+                opt_cls = optim.Adam
+            else:
+                opt_cls = optim.Adam if inner_optim == 'adam' else optim.SGD
+
+            inner_optimizer = opt_cls([modulator], lr=inner_lr)
+            
             mse = 0
             # Inner Optimization.
             for step in range(inner_steps):
@@ -112,7 +125,7 @@ def split(functaset,name="functaset", ratio=(0.8,0.2), root="."):
             val_set.append(functaset[i])
         
     
-    os.makedirs(f'{root}/functaset')
+    os.makedirs(f'{root}/functaset', exist_ok=True)
     joblib.dump(train_set, f'{root}/functaset/{name}_train.pkl')
     joblib.dump(val_set, f'{root}/functaset/{name}_val.pkl')
     
@@ -124,8 +137,19 @@ def get_args():
     parser.add_argument('--hidden-dim', type=int, default=256, help='SIREN hidden dimension')
     parser.add_argument('--mod-dim', type=int, default=512, help='modulation dimension')
     parser.add_argument('--depth', type=int, default=10, help='SIREN depth')
-    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer'], default='siren',
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer', 'fourier_lsa'], default='siren',
                         help='Coordinate INR backbone type. Overridden by checkpoint.model_args if present.')
+    parser.add_argument('--lsa-num-harmonics', type=int, default=8,
+                        help='Number of harmonics K in learnable spectral activation.')
+
+    parser.add_argument('--lsa-init-scale', type=float, default=1e-3,
+                       help='Initial std scale for learnable spectral activation coefficients.')
+
+    parser.add_argument('--lsa-no-linear', action='store_true', default=False,
+                        help='If set, remove the identity term u from LSA activation.')
+
+    parser.add_argument('--inner-optim', choices=['sgd', 'adam'], default='sgd',
+                    help='Optimizer for fitting phi when creating the functaset.')
     parser.add_argument('--fourier-num-freqs', type=int, default=64,
                         help='Number of random Fourier frequencies for --inr-type fourier_siren.')
     parser.add_argument('--fourier-sigma', type=float, default=10.0,
@@ -181,6 +205,9 @@ def _model_args_from_checkpoint(args, ckpt):
         'finer_freq': args.finer_freq,
         'finer_first_bias_scale': args.finer_first_bias_scale,
         'finer_scale_req_grad': args.finer_scale_req_grad,
+        'lsa_num_harmonics': args.lsa_num_harmonics,
+        'lsa_init_scale': args.lsa_init_scale,
+        'lsa_include_linear': not args.lsa_no_linear,
     }
     ckpt_model_args = ckpt.get('model_args', {}) or {}
     for key in model_args:
@@ -207,6 +234,22 @@ def _build_2d_model(model_args, device):
             fourier_include_input=model_args.get('fourier_include_input', False),
         )
 
+    if inr_type == 'fourier_lsa':
+        return ModulatedFourierLSA(
+            height=model_args['height'],
+            width=model_args['width'],
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+            fourier_sigma=model_args.get('fourier_sigma', 10.0),
+            fourier_include_input=model_args.get('fourier_include_input', False),
+            lsa_num_harmonics=model_args.get('lsa_num_harmonics', 8),
+            lsa_init_scale=model_args.get('lsa_init_scale', 1e-3),
+            lsa_include_linear=model_args.get('lsa_include_linear', True),
+        )
     if inr_type == 'finer':
         return ModulatedFINER(
             height=model_args['height'],
@@ -271,10 +314,10 @@ if __name__ == '__main__':
     print("[makeset] hidden_features:", getattr(getattr(modSiren, "siren", None), "hidden_features", None))
     print("[makeset] coord_normalization:", model_args.get("coord_normalization"))
 
-    functa_trainset = create_functaset(modSiren, dataloader_train, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet", lbfgs=args.lbfgs)
+    functa_trainset = create_functaset(modSiren, dataloader_train, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet", lbfgs=args.lbfgs, inner_optim=args.inner_optim)
     functaset_stem = args.functaset_stem if args.functaset_stem is not None else args.dataset
     split(functa_trainset, name=functaset_stem, root=args.saveroot) #Split to training, validation and save split functaset
-    functa_testset = create_functaset(modSiren, dataloader_test, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet",lbfgs=args.lbfgs)
+    functa_testset = create_functaset(modSiren, dataloader_test, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet",lbfgs=args.lbfgs, inner_optim=args.inner_optim)
     joblib.dump(functa_testset, f'{args.saveroot}/functaset/{functaset_stem}_test.pkl')
     
 
