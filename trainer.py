@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D
+from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
 from utils import adjust_learning_rate
 from tqdm import tqdm
 import os
@@ -33,8 +33,24 @@ def _build_2d_model(args, height, width, out_features):
             fourier_sigma=args.fourier_sigma,
             fourier_include_input=args.fourier_include_input,
         )
+
+    if args.inr_type == 'finer':
+        return ModulatedFINER(
+            height=height,
+            width=width,
+            hidden_features=args.hidden_dim,
+            num_layers=args.depth,
+            modul_features=args.mod_dim,
+            device=args.device,
+            out_features=out_features,
+            freq=args.finer_freq,
+            first_bias_scale=args.finer_first_bias_scale,
+            scale_req_grad=args.finer_scale_req_grad,
+        )
+
     if args.inr_type != 'siren':
         raise ValueError(f"Unknown --inr-type {args.inr_type!r}")
+
     return ModulatedSIREN(
         height=height,
         width=width,
@@ -162,7 +178,7 @@ def get_args():
     parser.add_argument('--hidden-dim', type=int, default=256, help='SIREN hidden dimension')
     parser.add_argument('--mod-dim', type=int, default=512, help='modulation dimension')
     parser.add_argument('--depth', type=int, default=10, help='SIREN depth')
-    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren'], default='siren',
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer'], default='siren',
                         help='Coordinate INR backbone type.')
     parser.add_argument('--fourier-num-freqs', type=int, default=64,
                         help='Number of random Fourier frequencies for --inr-type fourier_siren.')
@@ -173,6 +189,14 @@ def get_args():
     parser.add_argument('--siren-freq', type=float, default=30.0,
                         help='SIREN ω0 (angular frequency) in sin(ω0(·)); default 30.')
     parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
+    parser.add_argument('--finer-freq', type=float, default=30.0,
+                    help='FINER ω0 / frequency. Start with 30.0.')
+    parser.add_argument('--finer-first-bias-scale', type=float, default=1.0,
+                        help='FINER first-layer bias init range: U(-scale, scale). '
+                            'This controls the supported frequency set.')
+    parser.add_argument('--finer-scale-req-grad', action='store_true', default=False,
+                        help='If set, allow gradients through FINER scale = |z| + 1. '
+                            'Default false is closer to the reference implementation.')
     parser.add_argument('--num-epochs', type=int, default=6, help='number of epochs for external optimization')
     parser.add_argument('--data-path', type=str, default='..', help='path to MNIST, FMNIST or ModelNet10 dataset')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Pass "cuda" to use gpu')
@@ -191,6 +215,9 @@ def get_args():
                         help='If > 0, print per-layer spectral norms every N '
                              'outer batches. Useful for calibrating soft-Lipschitz '
                              'L / lambda. Default: 0 (off).')
+
+    parser.add_argument('--inner-steps', type=int, default=3,
+                    help='Number of inner-loop phi adaptation steps during meta-training.')
     variants.add_all_variant_args(parser)
     return parser.parse_args()
 
@@ -255,7 +282,7 @@ if __name__ == '__main__':
     os.makedirs(savedir, exist_ok=True)
     for epoch in range(start_epoch, start_epoch + args.num_epochs):
         loss = fit(
-            modSiren, dataloader, optimizer, criterion, epoch, inner_steps=3,inner_lr=args.int_lr, voxels=args.dataset=='modelnet',
+            modSiren, dataloader, optimizer, criterion, epoch, inner_steps=args.inner_steps,inner_lr=args.int_lr, voxels=args.dataset=='modelnet',
             penalty_fn=penalty_fn,
             log_sigmas_every=args.log_sigmas_every,
         )
@@ -281,7 +308,11 @@ if __name__ == '__main__':
                             'fourier_sigma': args.fourier_sigma,
                             'fourier_include_input': args.fourier_include_input,
                             'freq': args.siren_freq,
+                            'finer_freq': args.finer_freq,
+                            'finer_first_bias_scale': args.finer_first_bias_scale,
+                            'finer_scale_req_grad': args.finer_scale_req_grad,
                             'coord_normalization': 'zero_one_pixel_centers',
+                            
                         },
                         }, f'{savedir}/modSiren.pth')
 

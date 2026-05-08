@@ -12,8 +12,7 @@ from collections import OrderedDict
 
 import torch
 
-from SIREN import ModulatedSIREN, ModulatedSIREN3D, SineAffine
-
+from SIREN import ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER, SineAffine, FinerAffine
 
 @torch.no_grad()
 def _power_iter_sigma(W2d, n_iter=30, eps=1e-12):
@@ -51,7 +50,7 @@ def layer_sigmas(model, n_iter=30):
     out = OrderedDict()
     sine_idx = 0
     for m in model.modules():
-        if isinstance(m, SineAffine):
+        if isinstance(m, (SineAffine, FinerAffine)):            
             W = m.affine.weight
             out[f'sine.{sine_idx}'] = _power_iter_sigma(
                 W.reshape(W.shape[0], -1), n_iter

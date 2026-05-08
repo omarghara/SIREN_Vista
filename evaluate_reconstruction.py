@@ -37,7 +37,7 @@ from tqdm import tqdm
 
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D
+from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
 from utils import set_random_seeds
 import variants
 
@@ -408,6 +408,9 @@ def _build_model(args, ckpt_model_args, device):
         'fourier_sigma': args.fourier_sigma,
         'fourier_include_input': args.fourier_include_input,
         'freq': args.siren_freq,
+        'finer_freq': args.finer_freq,
+        'finer_first_bias_scale': args.finer_first_bias_scale,
+        'finer_scale_req_grad': args.finer_scale_req_grad,
     }
     if ckpt_model_args:
         for k in ('hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',

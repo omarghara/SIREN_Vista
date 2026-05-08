@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D
+from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
 from utils import adjust_learning_rate
 from tqdm import tqdm
 import os
@@ -124,7 +124,7 @@ def get_args():
     parser.add_argument('--hidden-dim', type=int, default=256, help='SIREN hidden dimension')
     parser.add_argument('--mod-dim', type=int, default=512, help='modulation dimension')
     parser.add_argument('--depth', type=int, default=10, help='SIREN depth')
-    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren'], default='siren',
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer'], default='siren',
                         help='Coordinate INR backbone type. Overridden by checkpoint.model_args if present.')
     parser.add_argument('--fourier-num-freqs', type=int, default=64,
                         help='Number of random Fourier frequencies for --inr-type fourier_siren.')
@@ -134,6 +134,15 @@ def get_args():
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
     parser.add_argument('--siren-freq', type=float, default=30.0,
                         help='SIREN ω0; overridden by checkpoint model_args.freq if present.')
+
+    parser.add_argument('--finer-freq', type=float, default=30.0,
+                        help='FINER ω0 / frequency. Start with 30.0.')
+    parser.add_argument('--finer-first-bias-scale', type=float, default=1.0,
+                        help='FINER first-layer bias init range: U(-scale, scale). '
+                             'This controls the supported frequency set.')
+    parser.add_argument('--finer-scale-req-grad', action='store_true', default=False,
+                        help='If set, allow gradients through FINER scale = |z| + 1. '
+                             'Default false is closer to the reference implementation.')
     parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
     parser.add_argument('--iters', type=int, default=100, help='number of optimization iterations per sample')
     parser.add_argument('--data-path', type=str, default='..', help='path to MNIST,FMNIST or ModelNet10 dataset')
@@ -169,6 +178,9 @@ def _model_args_from_checkpoint(args, ckpt):
         'fourier_sigma': args.fourier_sigma,
         'fourier_include_input': args.fourier_include_input,
         'freq': args.siren_freq,
+        'finer_freq': args.finer_freq,
+        'finer_first_bias_scale': args.finer_first_bias_scale,
+        'finer_scale_req_grad': args.finer_scale_req_grad,
     }
     ckpt_model_args = ckpt.get('model_args', {}) or {}
     for key in model_args:
@@ -178,7 +190,9 @@ def _model_args_from_checkpoint(args, ckpt):
 
 
 def _build_2d_model(model_args, device):
-    if model_args.get('inr_type', 'siren') == 'fourier_siren':
+    inr_type = model_args.get('inr_type', 'siren')
+
+    if inr_type == 'fourier_siren':
         return ModulatedFourierSIREN(
             height=model_args['height'],
             width=model_args['width'],
@@ -192,6 +206,21 @@ def _build_2d_model(model_args, device):
             fourier_sigma=model_args.get('fourier_sigma', 10.0),
             fourier_include_input=model_args.get('fourier_include_input', False),
         )
+
+    if inr_type == 'finer':
+        return ModulatedFINER(
+            height=model_args['height'],
+            width=model_args['width'],
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            freq=model_args.get('finer_freq', model_args.get('freq', 30.0)),
+            first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
+            scale_req_grad=model_args.get('finer_scale_req_grad', False),
+        )
+
     return ModulatedSIREN(
         height=model_args['height'],
         width=model_args['width'],

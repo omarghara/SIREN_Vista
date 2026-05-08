@@ -175,6 +175,142 @@ class SIREN(nn.Module):
 
 
 
+class FinerAffine(nn.Module):
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+            freq: float = 30.0,
+            start: bool = False,
+            use_shift: bool = False,
+            shift=None,
+            first_bias_scale: float = None,
+            scale_req_grad: bool = False,
+    ):
+        """
+        FINER layer.
+
+        FINER activation:
+            sin(freq * (|z| + 1) * z)
+
+        where:
+            z = W x + b + shift
+
+        first_bias_scale controls the first-layer bias range, which tunes
+        the selected frequency sub-functions in FINER.
+        """
+        super(FinerAffine, self).__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.freq = freq
+        self.start = start
+        self.use_shift = use_shift
+        self.first_bias_scale = first_bias_scale
+        self.scale_req_grad = scale_req_grad
+
+        if use_shift:
+            assert shift.size(0) == out_features
+            self.shift = shift
+
+        self.affine = nn.Linear(in_features, out_features, bias=True)
+        self._init_affine()
+
+    def _init_affine(self):
+        # Same weight scale as SIREN/FINER reference.
+        b = 1 / self.in_features if self.start else math.sqrt(6 / self.in_features) / self.freq
+        nn.init.uniform_(self.affine.weight, -b, b)
+
+        # FINER important part:
+        # first layer bias can be initialized in a wider range to select
+        # different variable-periodic sub-functions/frequencies.
+        if self.start and self.first_bias_scale is not None:
+            nn.init.uniform_(self.affine.bias, -self.first_bias_scale, self.first_bias_scale)
+        else:
+            nn.init.zeros_(self.affine.bias)
+
+    def activation(self, z):
+        if self.scale_req_grad:
+            scale = torch.abs(z) + 1.0
+        else:
+            # Original FINER implementation often detaches this scale.
+            # Start with detached scale for stability.
+            with torch.no_grad():
+                scale = torch.abs(z) + 1.0
+
+        return torch.sin(self.freq * scale * z)
+
+    def forward(self, x):
+        z = self.affine(x)
+
+        if self.use_shift:
+            z = z + self.shift.unsqueeze(0)
+
+        return self.activation(z)
+
+
+
+class FINER(nn.Module):
+    def __init__(
+            self,
+            hidden_features: int,
+            num_layers: int,
+            freq: float = 30.0,
+            use_shift: bool = False,
+            voxel: bool = False,
+            out_features: int = 1,
+            in_features: int = None,
+            first_bias_scale: float = None,
+            scale_req_grad: bool = False,
+    ):
+        super(FINER, self).__init__()
+
+        self.hidden_features = hidden_features
+        self.num_layers = num_layers
+        self.freq = freq
+        self.use_shift = use_shift
+        self.voxel = voxel
+        self.out_features = out_features
+        self.in_features = in_features if in_features is not None else (3 if voxel else 2)
+        self.first_bias_scale = first_bias_scale
+        self.scale_req_grad = scale_req_grad
+
+        self.net = self._make_layers()
+
+        self.hidden2rgb = nn.Linear(hidden_features, out_features, bias=True)
+        b = math.sqrt(6 / hidden_features) / freq
+        nn.init.uniform_(self.hidden2rgb.weight, -b, b)
+        nn.init.zeros_(self.hidden2rgb.bias)
+
+    def _make_layers(self):
+        assert self.num_layers > 0
+
+        layers = []
+
+        for i in range(self.num_layers):
+            in_features = self.in_features if i == 0 else self.hidden_features
+
+            layers.append(
+                FinerAffine(
+                    in_features=in_features,
+                    out_features=self.hidden_features,
+                    freq=self.freq,
+                    start=(i == 0),
+                    use_shift=self.use_shift,
+                    shift=torch.zeros(self.hidden_features) if self.use_shift else None,
+                    first_bias_scale=self.first_bias_scale if i == 0 else None,
+                    scale_req_grad=self.scale_req_grad,
+                )
+            )
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.net(x)
+        out = self.hidden2rgb(out)
+        return out
+
+
 class ModulatedSIREN(nn.Module):
     def __init__(
             self,
@@ -296,6 +432,62 @@ class ModulatedFourierSIREN(nn.Module):
         self.assign_shift(shift=shift)
         coord = self.meshgrid.clone()
         coord = self.fourier(coord)
+        out = self.siren(coord)
+        return out
+
+
+
+class ModulatedFINER(nn.Module):
+    def __init__(
+            self,
+            height: int,
+            width: int,
+            hidden_features: int,
+            num_layers: int,
+            modul_features: int,
+            freq: float = 30.0,
+            device='cuda',
+            out_features: int = 1,
+            first_bias_scale: float = None,
+            scale_req_grad: bool = False,
+    ):
+        super(ModulatedFINER, self).__init__()
+
+        self.height = height
+        self.width = width
+        self.out_features = out_features
+        self.meshgrid = make_normalized_pixel_grid(height, width, device=device)
+
+        self.finer_first_bias_scale = first_bias_scale
+        self.finer_scale_req_grad = scale_req_grad
+
+        self.siren = FINER(
+            hidden_features=hidden_features,
+            num_layers=num_layers,
+            freq=freq,
+            use_shift=True,
+            out_features=out_features,
+            first_bias_scale=first_bias_scale,
+            scale_req_grad=scale_req_grad,
+        )
+
+        self.modul_features = modul_features
+        self.modul = nn.Linear(modul_features, hidden_features * num_layers)
+
+    def assign_shift(self, shift):
+        hidden_features = self.siren.hidden_features
+        assert shift.size(0) == hidden_features * self.siren.num_layers
+
+        i = 0
+        for layer in self.siren.net:
+            layer.shift = shift[i * hidden_features: (i + 1) * hidden_features]
+            i += 1
+
+    def forward(self, phi):
+        shift = self.modul(phi)
+        self.assign_shift(shift=shift)
+
+        coord = self.meshgrid.clone()
         out = self.siren(coord)
         return out
         

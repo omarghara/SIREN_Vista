@@ -1,26 +1,11 @@
 #!/bin/bash
 
-# Functa-like Fourier-SIREN CIFAR-10 pipeline:
-#   1. meta-train a ModulatedFourierSIREN backbone,
+# Functa-like FINER CIFAR-10 pipeline:
+#   1. meta-train a ModulatedFINER backbone,
 #   2. create a CIFAR-10 functaset,
-#   3. train the downstream parameter-space classifier,
+#   3. train downstream parameter-space classifier,
 #   4. evaluate reconstruction quality,
 #   5. skip PGD for now.
-#
-# This run assumes SIREN.py now uses normalized [0,1] pixel-center coordinates:
-#   x_j = (j + 0.5) / W
-#   y_i = (i + 0.5) / H
-#
-# Motivation:
-#   The stronger Functa-like vanilla SIREN was still blurry / low-frequency.
-#   This run keeps the Functa-like capacity and normalized coordinates,
-#   but adds Fourier features to help recover high-frequency details.
-#
-# Coordinate path:
-#   normalized (x,y)
-#      -> [x,y, sin(2πBv), cos(2πBv)] if FOURIER_INCLUDE_INPUT=1
-#      -> modulated SIREN
-#      -> RGB
 
 set -euo pipefail
 
@@ -30,41 +15,37 @@ HIDDEN_DIM=512
 MOD_DIM=1024
 DEPTH=15
 
-INR_TYPE=fourier_siren
+INR_TYPE=finer
 COORD_TAG="norm01"
 
-FOURIER_NUM_FREQS=64
-FOURIER_SIGMA=5.0
-FOURIER_INCLUDE_INPUT=1
-
-# SIREN hidden-layer ω0 (same as Modulated*SIREN ``freq``; default in code is 30).
-SIREN_FREQ=90
+FINER_FREQ=30.0
+FINER_FIRST_BIAS_SCALE=2.0
+FINER_SCALE_REQ_GRAD=0
 
 # ---- training hyperparameters ------------------------------------------------
 
 EPOCHS=10
 INT_LR=0.01
+INNER_STEPS=3
 
-# Functa used a very small outer LR (~3e-6).
-# 1e-5 is a practical middle point for this CIFAR test.
 EXT_LR=1e-5
-
 TRAIN_BATCH_SIZE=32
 
 MAKESET_ITERS=50
+MAKESET_INNER_OPTIM=sgd
 
 CUDA_GPU=1
 LOG_SIGMAS_EVERY=50
 
-EVAL_ITERS="20,50,100,200,500"
+EVAL_ITERS="5,10,20,50,100,200,500"
 EVAL_MAX_SAMPLES=2000
 EVAL_BATCH_SIZE=64
+EVAL_INNER_OPTIM=sgd
 
 RUN_PGD=0
 
 # ---- classifier hyperparameters ---------------------------------------------
 
-# Slightly stronger classifier because MOD_DIM=1024 and CIFAR is harder.
 CLF_LR=0.01
 CLF_WIDTH=1024
 CLF_DEPTH=4
@@ -75,17 +56,15 @@ CLF_EPOCHS=80
 # -----------------------------------------------------------------------------
 
 EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
-SIGMA_TAG=$(printf "%g" "${FOURIER_SIGMA}" | tr '.' 'p')
+BIAS_TAG=$(printf "%g" "${FINER_FIRST_BIAS_SCALE}" | tr '.' 'p')
 
-if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
-    INPUT_TAG="rawxy"
+if [[ "${FINER_SCALE_REQ_GRAD}" -eq 1 ]]; then
+    SCALE_TAG="scalegrad"
 else
-    INPUT_TAG="norawxy"
+    SCALE_TAG="scaledetach"
 fi
 
-W0_TAG=$(printf "%g" "${SIREN_FREQ}" | tr '.' 'p')
-
-SLUG="functa_like_cifar10_fourier_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_nf${FOURIER_NUM_FREQS}_sig${SIGMA_TAG}_${INPUT_TAG}_${COORD_TAG}_w0${W0_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_make${MAKESET_ITERS}"
+SLUG="functa_like_cifar10_finer_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_freq${FINER_FREQ}_bias${BIAS_TAG}_${SCALE_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_make${MAKESET_ITERS}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -93,13 +72,12 @@ VARIANT_FLAGS=(
 
 INR_FLAGS=(
     --inr-type "${INR_TYPE}"
-    --fourier-num-freqs "${FOURIER_NUM_FREQS}"
-    --fourier-sigma "${FOURIER_SIGMA}"
-    --siren-freq "${SIREN_FREQ}"
+    --finer-freq "${FINER_FREQ}"
+    --finer-first-bias-scale "${FINER_FIRST_BIAS_SCALE}"
 )
 
-if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
-    INR_FLAGS+=(--fourier-include-input)
+if [[ "${FINER_SCALE_REQ_GRAD}" -eq 1 ]]; then
+    INR_FLAGS+=(--finer-scale-req-grad)
 fi
 
 MODEL_DIR="model_cifar10/${SLUG}"
@@ -113,34 +91,32 @@ export CUDA_VISIBLE_DEVICES="${CUDA_GPU}"
 
 cd ~/SIREN_Vista || exit 1
 
-echo "== Functa-like Fourier-SIREN CIFAR-10 pipeline =="
+echo "== Functa-like FINER CIFAR-10 pipeline =="
 echo "   dataset       = cifar10"
 echo "   inr_type      = ${INR_TYPE}"
 echo "   hidden_dim    = ${HIDDEN_DIM}"
 echo "   mod_dim       = ${MOD_DIM}"
 echo "   depth         = ${DEPTH}"
 echo "   coord norm    = ${COORD_TAG} pixel centers"
-echo "   fourier freqs = ${FOURIER_NUM_FREQS}"
-echo "   fourier sigma = ${FOURIER_SIGMA}"
-echo "   include input = ${FOURIER_INCLUDE_INPUT} (${INPUT_TAG})"
-echo "   siren ω0      = ${SIREN_FREQ}"
+echo "   finer freq    = ${FINER_FREQ}"
+echo "   finer bias    = ${FINER_FIRST_BIAS_SCALE}"
+echo "   scale grad    = ${FINER_SCALE_REQ_GRAD}"
 echo "   int_lr        = ${INT_LR}"
+echo "   inner steps   = ${INNER_STEPS}"
 echo "   ext_lr        = ${EXT_LR}"
 echo "   epochs        = ${EPOCHS}"
 echo "   train batch   = ${TRAIN_BATCH_SIZE}"
 echo "   make iters    = ${MAKESET_ITERS}"
-echo "   classifier    = width ${CLF_WIDTH}, depth ${CLF_DEPTH}, dropout ${CLF_DROPOUT}, epochs ${CLF_EPOCHS}"
+echo "   make optim    = ${MAKESET_INNER_OPTIM}"
 echo "   slug          = ${SLUG}"
-echo "   CUDA device   = ${CUDA_VISIBLE_DEVICES}"
 echo "   checkpoint    = ${CHECKPOINT}"
 echo "   run root      = ${RUN_ROOT}"
-echo "   PGD enabled   = ${RUN_PGD}"
 echo
 
 python -c "import torch; print('cuda available:', torch.cuda.is_available()); print('visible gpus:', torch.cuda.device_count()); print('gpu name:', torch.cuda.get_device_name(0))"
 
 echo
-echo "Step 1/5: Training Functa-like Fourier-SIREN CIFAR-10 backbone"
+echo "Step 1/5: Training FINER CIFAR-10 backbone"
 echo "          -> ${CHECKPOINT}"
 
 python trainer.py \
@@ -154,6 +130,7 @@ python trainer.py \
     --hidden-dim "${HIDDEN_DIM}" \
     --mod-dim "${MOD_DIM}" \
     --depth "${DEPTH}" \
+    --inner-steps "${INNER_STEPS}" \
     "${INR_FLAGS[@]}" \
     --model-name "${SLUG}" \
     "${VARIANT_FLAGS[@]}" \
@@ -192,29 +169,9 @@ if ckpt.get("model_name") != expected_model_name:
     sys.exit(1)
 
 model_args = ckpt.get("model_args", {})
-
-expected = {
-    "inr_type": "${INR_TYPE}",
-    "hidden_dim": ${HIDDEN_DIM},
-    "mod_dim": ${MOD_DIM},
-    "depth": ${DEPTH},
-    "fourier_num_freqs": ${FOURIER_NUM_FREQS},
-    "fourier_sigma": float("${FOURIER_SIGMA}"),
-    "fourier_include_input": bool(${FOURIER_INCLUDE_INPUT}),
-    "freq": float("${SIREN_FREQ}"),
-}
-
-for k, v in expected.items():
-    got = model_args.get(k)
-    print(f"  check {k}: got={got!r}, expected={v!r}")
-    if got != v:
-        print(f"WARNING: model_args[{k!r}] mismatch: got {got!r}, expected {v!r}")
-
-coord_norm = model_args.get("coord_normalization")
-if coord_norm is not None:
-    print("  coord_normalization:", coord_norm)
-else:
-    print("  WARNING: coord_normalization missing from checkpoint model_args")
+if model_args.get("inr_type") != "finer":
+    print("ERROR: checkpoint is not FINER:", model_args.get("inr_type"), file=sys.stderr)
+    sys.exit(1)
 PYCKPT
 
 echo
@@ -228,6 +185,8 @@ python makeset.py \
     --dataset cifar10 \
     --data-path ../data \
     --iters "${MAKESET_ITERS}" \
+    --lr "${INT_LR}" \
+    --inner-optim "${MAKESET_INNER_OPTIM}" \
     --checkpoint "${CHECKPOINT}" \
     --saveroot "${RUN_ROOT}" \
     --device cuda \
@@ -258,7 +217,7 @@ python ~/SIREN_Vista/train_classifier.py \
 popd > /dev/null
 
 echo
-echo "Step 4/5: Evaluating CIFAR-10 reconstruction quality (MSE / PSNR / SSIM)"
+echo "Step 4/5: Evaluating CIFAR-10 reconstruction quality"
 echo "          -> ${RUN_ROOT}/reconstruction_eval.json"
 
 EVAL_CAP_ARGS=()
@@ -276,25 +235,18 @@ python evaluate_reconstruction.py \
     --iter-checkpoints "${EVAL_ITERS}" \
     --split both \
     --inner-lr "${INT_LR}" \
+    --inner-optim "${EVAL_INNER_OPTIM}" \
     --batch-size "${EVAL_BATCH_SIZE}" \
     --output "${RUN_ROOT}/reconstruction_eval.json" \
     "${EVAL_CAP_ARGS[@]}"
 
 echo
 echo "Step 5/5: Full-PGD adversarial attack"
-
-if [[ "${RUN_PGD}" -eq 1 ]]; then
-    echo "ERROR: CIFAR-10 PGD is not wired for this experiment yet." >&2
-    exit 1
-else
-    echo "          skipped because RUN_PGD=0"
-    PGD_LOG="${RUN_ROOT}/pgd_attack.log"
-fi
+echo "          skipped because RUN_PGD=0"
 
 echo
 echo "Done."
-echo "SIREN checkpoint : ${CHECKPOINT}"
-echo "Functaset        : ${RUN_ROOT}/functaset/${SLUG}_{train,val,test}.pkl"
-echo "Classifier       : ${RUN_ROOT}/cifar10_classifier/best_classifier.pth"
-echo "Recon eval JSON  : ${RUN_ROOT}/reconstruction_eval.json"
-echo "PGD attack log   : skipped"
+echo "SIREN/FINER checkpoint : ${CHECKPOINT}"
+echo "Functaset              : ${RUN_ROOT}/functaset/${SLUG}_{train,val,test}.pkl"
+echo "Classifier             : ${RUN_ROOT}/cifar10_classifier/best_classifier.pth"
+echo "Recon eval JSON        : ${RUN_ROOT}/reconstruction_eval.json"
