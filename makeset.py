@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from dataloader import get_cifar10_loader, get_mnist_loader
+from torch.utils.data import DataLoader, Subset
 from dataloader_modelnet import get_modelnet_loader
 from SIREN import (
     ModulatedFourierSIREN,
@@ -9,6 +10,7 @@ from SIREN import (
     ModulatedSIREN3D,
     ModulatedFINER,
     ModulatedFourierLSA,
+    SpatialModulatedINR,
 )
 from utils import adjust_learning_rate
 from tqdm import tqdm
@@ -47,19 +49,21 @@ def create_functaset(
     functaset = []
     device = 'cuda'
     model = model.cuda()
-    modul_features = model.modul_features
     inner_criterion = nn.MSELoss().cuda() if torch.cuda.is_available() else nn.MSELoss()
     prog_bar = tqdm(data_loader, total=len(data_loader))
     _printed_phi_shape = False
+    is_spatial = bool(getattr(model, 'is_spatial', False))
 
     for image, label in prog_bar:
         
         image = image.squeeze().to(device) if voxels else _prep_2d_image(image[0], device)
-        modulator = torch.zeros(modul_features).float().to(device)
+        # init_phi returns a zero tensor of the model's native phi shape:
+        # (modul_features,) for global Functa, (s, s, c) for Spatial Functa.
+        modulator = model.init_phi(device=device).float()
         modulator.requires_grad = True
 
         if not _printed_phi_shape:
-            print("[makeset] first phi shape:", modulator.shape)
+            print("[makeset] first phi shape:", tuple(modulator.shape), "is_spatial:", is_spatial)
             _printed_phi_shape = True
         
         def closure():
@@ -99,12 +103,17 @@ def create_functaset(
                 inner_optimizer.step()
      
         prog_bar.set_description(f'MSE: {mse}')
-        
-        update_dict = {'modul': modulator.detach().cpu().numpy(),
-             'label': label[0].item()}
+
+        modul_np = modulator.detach().cpu().contiguous().numpy()
+        update_dict = {
+            'modul': modul_np,
+            'label': label[0].item(),
+            'is_spatial': is_spatial,
+            'phi_shape': tuple(modul_np.shape),
+        }
         if voxels:
-            update_dict.update({'n_pts':int(image.sum().item())})
-        
+            update_dict.update({'n_pts': int(image.sum().item())})
+
         functaset.append(update_dict)
 
     return functaset
@@ -184,6 +193,26 @@ def get_args():
                         help='SIREN variant used at training time. Must match the '
                              'variant recorded in the checkpoint so architecture '
                              'wrappers (if any) line up before loading state_dict.')
+
+    parser.add_argument("--max-train-samples", type=int, default=None)
+    parser.add_argument("--max-test-samples", type=int, default=None)
+
+    # Spatial Functa flags. Values present in checkpoint.model_args take precedence.
+    parser.add_argument('--spatial-modulation', action='store_true', default=False,
+                        help='Use a spatial latent grid (Spatial Functa). Defaults '
+                             'are overridden by checkpoint.model_args if present.')
+    parser.add_argument('--latent-spatial-dim', type=int, default=8,
+                        help='Spatial side s of the latent grid. Used only when '
+                             '--spatial-modulation is set or the checkpoint is spatial.')
+    parser.add_argument('--latent-dim', type=int, default=16,
+                        help='Per-cell latent channels c of the latent grid.')
+    parser.add_argument('--spatial-interp', choices=['nearest'], default='nearest',
+                        help='Spatial latent interpolation; only nearest (1-NN) is supported.')
+    parser.add_argument('--use-local-coords', action='store_true', default=False,
+                        help='Feed per-cell local coordinates instead of global coords.')
+    parser.add_argument('--modulation-type', choices=['shift'], default='shift',
+                        help='Spatial modulation type; only shift is supported.')
+
     variants.add_all_variant_args(parser)
     return parser.parse_args()
 
@@ -208,6 +237,12 @@ def _model_args_from_checkpoint(args, ckpt):
         'lsa_num_harmonics': args.lsa_num_harmonics,
         'lsa_init_scale': args.lsa_init_scale,
         'lsa_include_linear': not args.lsa_no_linear,
+        'spatial_modulation': bool(getattr(args, 'spatial_modulation', False)),
+        'latent_spatial_dim': args.latent_spatial_dim,
+        'latent_dim': args.latent_dim,
+        'spatial_interp': args.spatial_interp,
+        'use_local_coords': bool(args.use_local_coords),
+        'modulation_type': args.modulation_type,
     }
     ckpt_model_args = ckpt.get('model_args', {}) or {}
     for key in model_args:
@@ -219,8 +254,37 @@ def _model_args_from_checkpoint(args, ckpt):
 def _build_2d_model(model_args, device):
     inr_type = model_args.get('inr_type', 'siren')
 
+    if model_args.get('spatial_modulation', False):
+        model = SpatialModulatedINR(
+            height=model_args['height'],
+            width=model_args['width'],
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            latent_spatial_dim=model_args.get('latent_spatial_dim', 8),
+            latent_dim=model_args.get('latent_dim', 16),
+            base_inr_type=inr_type,
+            spatial_interp=model_args.get('spatial_interp', 'nearest'),
+            use_local_coords=model_args.get('use_local_coords', True),
+            modulation_type=model_args.get('modulation_type', 'shift'),
+            freq=model_args.get('freq', 30.0),
+            device=device,
+            out_features=model_args['out_features'],
+            fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+            fourier_sigma=model_args.get('fourier_sigma', 10.0),
+            fourier_include_input=model_args.get('fourier_include_input', False),
+            first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
+            scale_req_grad=model_args.get('finer_scale_req_grad', False),
+            lsa_num_harmonics=model_args.get('lsa_num_harmonics', 8),
+            lsa_init_scale=model_args.get('lsa_init_scale', 1e-3),
+            lsa_include_linear=model_args.get('lsa_include_linear', True),
+        )
+        print(f"[build] {type(model).__name__}  base_inr_type={model.base_inr_type}  "
+              f"is_spatial={model.is_spatial}  phi_shape={tuple(model.phi_shape)}  "
+              f"phi_numel={int(model.phi_numel)}")
+        return model
+
     if inr_type == 'fourier_siren':
-        return ModulatedFourierSIREN(
+        model = ModulatedFourierSIREN(
             height=model_args['height'],
             width=model_args['width'],
             hidden_features=model_args['hidden_dim'],
@@ -233,9 +297,8 @@ def _build_2d_model(model_args, device):
             fourier_sigma=model_args.get('fourier_sigma', 10.0),
             fourier_include_input=model_args.get('fourier_include_input', False),
         )
-
-    if inr_type == 'fourier_lsa':
-        return ModulatedFourierLSA(
+    elif inr_type == 'fourier_lsa':
+        model = ModulatedFourierLSA(
             height=model_args['height'],
             width=model_args['width'],
             hidden_features=model_args['hidden_dim'],
@@ -250,8 +313,8 @@ def _build_2d_model(model_args, device):
             lsa_init_scale=model_args.get('lsa_init_scale', 1e-3),
             lsa_include_linear=model_args.get('lsa_include_linear', True),
         )
-    if inr_type == 'finer':
-        return ModulatedFINER(
+    elif inr_type == 'finer':
+        model = ModulatedFINER(
             height=model_args['height'],
             width=model_args['width'],
             hidden_features=model_args['hidden_dim'],
@@ -263,46 +326,132 @@ def _build_2d_model(model_args, device):
             first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
             scale_req_grad=model_args.get('finer_scale_req_grad', False),
         )
+    else:  # 'siren' or unknown -> default SIREN
+        model = ModulatedSIREN(
+            height=model_args['height'],
+            width=model_args['width'],
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            freq=model_args.get('freq', 30.0),
+        )
 
-    return ModulatedSIREN(
-        height=model_args['height'],
-        width=model_args['width'],
-        hidden_features=model_args['hidden_dim'],
-        num_layers=model_args['depth'],
-        modul_features=model_args['mod_dim'],
-        device=device,
-        out_features=model_args['out_features'],
-        freq=model_args.get('freq', 30.0),
+    print(f"[build] {type(model).__name__}  is_spatial={model.is_spatial}  "
+          f"phi_shape={tuple(model.phi_shape)}  phi_numel={int(model.phi_numel)}")
+    return model
+
+
+
+def maybe_limit_dataloader(dataloader, max_samples, split_name):
+    if max_samples is None:
+        print(f"[makeset] {split_name} full size: {len(dataloader.dataset)}")
+        return dataloader
+
+    max_samples = min(max_samples, len(dataloader.dataset))
+
+    subset = Subset(
+        dataloader.dataset,
+        range(max_samples)
     )
 
+    print(f"[makeset] {split_name} subset size: {len(subset)}")
 
+    return DataLoader(
+        subset,
+        batch_size=dataloader.batch_size,
+        shuffle=False,
+        num_workers=getattr(dataloader, "num_workers", 0),
+        pin_memory=getattr(dataloader, "pin_memory", False),
+    )
+    
 if __name__ == '__main__':
 
-    
-    args = get_args()    
+    args = get_args()
     set_random_seeds(args.seed, args.device)
-    
+
     pretrained = torch.load(args.checkpoint, map_location=args.device)
     model_args = _model_args_from_checkpoint(args, pretrained)
 
     if args.dataset == "modelnet":
         if model_args.get('inr_type', 'siren') != 'siren':
-            raise SystemExit("fourier_siren is currently supported for 2D image datasets only.")
-        resample_shape = (15,15,15) #we use this resampling in all experiments
-        dataloader_train = get_modelnet_loader(train=True, batch_size=1, resample_shape=resample_shape)
-        dataloader_test = get_modelnet_loader(train=False, batch_size=1, resample_shape=resample_shape)
-        modSiren = ModulatedSIREN3D(height=resample_shape[0], width=resample_shape[1], depth=resample_shape[2],\
-            hidden_features=model_args['hidden_dim'], num_layers=model_args['depth'], modul_features=model_args['mod_dim']) #we use a mod dim of 2048 in our exps
-  
+            raise SystemExit("fourier_siren/finer/fourier_lsa are currently supported for 2D image datasets only.")
+
+        resample_shape = (15, 15, 15)  # we use this resampling in all experiments
+
+        dataloader_train = get_modelnet_loader(
+            train=True,
+            batch_size=1,
+            resample_shape=resample_shape,
+        )
+
+        dataloader_test = get_modelnet_loader(
+            train=False,
+            batch_size=1,
+            resample_shape=resample_shape,
+        )
+
+        modSiren = ModulatedSIREN3D(
+            height=resample_shape[0],
+            width=resample_shape[1],
+            depth=resample_shape[2],
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+        )
+
     else:
         if args.dataset == "cifar10":
-            dataloader_train = get_cifar10_loader(args.data_path, train=True, batch_size=1)
-            dataloader_test = get_cifar10_loader(args.data_path, train=False, batch_size=1)
+
+            dataloader_train = get_cifar10_loader(
+                args.data_path,
+                train=True,
+                batch_size=1,
+            )
+
+            dataloader_test = get_cifar10_loader(
+                args.data_path,
+                train=False,
+                batch_size=1,
+            )
+
             modSiren = _build_2d_model(model_args, args.device)
+
         else:
-            dataloader_train = get_mnist_loader(args.data_path, train=True, batch_size=1, fashion = args.dataset=="fmnist")
-            dataloader_test = get_mnist_loader(args.data_path, train=False, batch_size=1, fashion = args.dataset=="fmnist")
-            modSiren = _build_2d_model(model_args, args.device) #28,28 is mnist and fmnist dims
+            dataloader_train = get_mnist_loader(
+                args.data_path,
+                train=True,
+                batch_size=1,
+                fashion=args.dataset == "fmnist",
+            )
+
+            dataloader_test = get_mnist_loader(
+                args.data_path,
+                train=False,
+                batch_size=1,
+                fashion=args.dataset == "fmnist",
+            )
+
+            modSiren = _build_2d_model(model_args, args.device)
+
+    # ---------------------------------------------------------
+    # Optional subset slicing for faster functaset creation.
+    # Important: do NOT assign dataloader.dataset after DataLoader
+    # is initialized. Instead, create a new limited DataLoader.
+    # ---------------------------------------------------------
+
+    dataloader_train = maybe_limit_dataloader(
+        dataloader_train,
+        args.max_train_samples,
+        "train",
+    )
+
+    dataloader_test = maybe_limit_dataloader(
+        dataloader_test,
+        args.max_test_samples,
+        "test",
+    )
 
     modSiren = variants.build(args.variant, modSiren, args)
     modSiren.load_state_dict(pretrained['state_dict'])
@@ -314,10 +463,35 @@ if __name__ == '__main__':
     print("[makeset] hidden_features:", getattr(getattr(modSiren, "siren", None), "hidden_features", None))
     print("[makeset] coord_normalization:", model_args.get("coord_normalization"))
 
-    functa_trainset = create_functaset(modSiren, dataloader_train, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet", lbfgs=args.lbfgs, inner_optim=args.inner_optim)
     functaset_stem = args.functaset_stem if args.functaset_stem is not None else args.dataset
-    split(functa_trainset, name=functaset_stem, root=args.saveroot) #Split to training, validation and save split functaset
-    functa_testset = create_functaset(modSiren, dataloader_test, inner_steps=args.iters, inner_lr=args.lr, voxels=args.dataset=="modelnet",lbfgs=args.lbfgs, inner_optim=args.inner_optim)
-    joblib.dump(functa_testset, f'{args.saveroot}/functaset/{functaset_stem}_test.pkl')
-    
 
+    functa_trainset = create_functaset(
+        modSiren,
+        dataloader_train,
+        inner_steps=args.iters,
+        inner_lr=args.lr,
+        voxels=args.dataset == "modelnet",
+        lbfgs=args.lbfgs,
+        inner_optim=args.inner_optim,
+    )
+
+    split(
+        functa_trainset,
+        name=functaset_stem,
+        root=args.saveroot,
+    )
+
+    functa_testset = create_functaset(
+        modSiren,
+        dataloader_test,
+        inner_steps=args.iters,
+        inner_lr=args.lr,
+        voxels=args.dataset == "modelnet",
+        lbfgs=args.lbfgs,
+        inner_optim=args.inner_optim,
+    )
+
+    joblib.dump(
+        functa_testset,
+        f'{args.saveroot}/functaset/{functaset_stem}_test.pkl',
+    )

@@ -168,7 +168,9 @@ class SineAffine(nn.Module):
         z = self.affine(x)
 
         if self.use_shift:
-            z = z + self.shift.unsqueeze(0)
+            # self.shift may be (hidden,) for global modulation or (N, hidden)
+            # for spatial per-pixel modulation; broadcasting handles both.
+            z = z + self.shift
 
         out = self.apply_activation(z)
         return out
@@ -296,7 +298,9 @@ class FinerAffine(nn.Module):
         z = self.affine(x)
 
         if self.use_shift:
-            z = z + self.shift.unsqueeze(0)
+            # self.shift may be (hidden,) for global modulation or (N, hidden)
+            # for spatial per-pixel modulation; broadcasting handles both.
+            z = z + self.shift
 
         return self.apply_activation(z)
 
@@ -409,7 +413,9 @@ class SpectralAffine(nn.Module):
         z = self.affine(x)
 
         if self.use_shift:
-            z = z + self.shift.unsqueeze(0)
+            # self.shift may be (hidden,) for global modulation or (N, hidden)
+            # for spatial per-pixel modulation; broadcasting handles both.
+            z = z + self.shift
 
         return self.apply_activation(z)
 
@@ -508,6 +514,15 @@ class ModulatedSIREN(nn.Module):
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
 
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
+
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features
         assert shift.size(0) == hidden_features * self.siren.num_layers
@@ -569,6 +584,15 @@ class ModulatedFourierSIREN(nn.Module):
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
 
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
+
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features
         assert shift.size(0) == hidden_features * self.siren.num_layers
@@ -623,6 +647,15 @@ class ModulatedFINER(nn.Module):
 
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
+
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
 
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features
@@ -686,6 +719,15 @@ class ModulatedLSA(nn.Module):
 
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
+
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
 
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features
@@ -769,6 +811,15 @@ class ModulatedFourierLSA(nn.Module):
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
 
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
+
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features
         assert shift.size(0) == hidden_features * self.siren.num_layers
@@ -784,6 +835,187 @@ class ModulatedFourierLSA(nn.Module):
         coord = self.fourier(coord)
         out = self.siren(coord)
         return out
+
+
+# ============================================================
+# Spatial Functa wrapper (1-NN, shift-only)
+# ============================================================
+
+class SpatialModulatedINR(nn.Module):
+    """Spatial Functa wrapper.
+
+    Replaces a single global modulation vector with a spatial latent grid
+    phi of shape (s, s, c). For each pixel coordinate in [0, 1]^2:
+        1) find its cell (cy, cx) = floor(coord * s)            (1-NN)
+        2) pull the cell latent z_cell = phi[cy, cx, :]          (N, c)
+        3) optionally use local coords (coord * s - cell), in [0, 1] per cell
+        4) map per-pixel z_cell -> per-pixel shifts via a single Linear
+           (mathematically equivalent to the paper's 1x1 conv lambda(z))
+        5) apply the per-pixel shifts inside each backbone layer
+        6) read out via the backbone's hidden->out_features head
+
+    Supports four backbones via base_inr_type in {'siren', 'fourier_siren',
+    'finer', 'fourier_lsa'}.
+
+    Modulation type is shift-only (paper default for the 1-NN row of Table 4).
+    Reference: From Data to Functa, https://arxiv.org/pdf/2302.03130 Sec. 4 + App. C.1.
+    """
+
+    SUPPORTED_BACKBONES = ('siren', 'fourier_siren', 'finer', 'fourier_lsa')
+
+    def __init__(
+            self,
+            height: int,
+            width: int,
+            hidden_features: int,
+            num_layers: int,
+            latent_spatial_dim: int,
+            latent_dim: int,
+            base_inr_type: str = 'siren',
+            spatial_interp: str = 'nearest',
+            use_local_coords: bool = True,
+            modulation_type: str = 'shift',
+            freq: float = 30.0,
+            device='cuda',
+            out_features: int = 1,
+            fourier_num_freqs: int = 64,
+            fourier_sigma: float = 10.0,
+            fourier_include_input: bool = False,
+            first_bias_scale: float = None,
+            scale_req_grad: bool = False,
+            lsa_num_harmonics: int = 8,
+            lsa_init_scale: float = 1e-3,
+            lsa_include_linear: bool = True,
+    ):
+        super().__init__()
+
+        if base_inr_type not in self.SUPPORTED_BACKBONES:
+            raise ValueError(
+                f"base_inr_type must be one of {self.SUPPORTED_BACKBONES}, got {base_inr_type!r}"
+            )
+        if spatial_interp != 'nearest':
+            raise NotImplementedError(
+                f"spatial_interp={spatial_interp!r} not implemented yet; only 'nearest' (1-NN)"
+            )
+        if modulation_type != 'shift':
+            raise NotImplementedError(
+                f"modulation_type={modulation_type!r} not implemented yet; only 'shift'"
+            )
+
+        self.height = height
+        self.width = width
+        self.out_features = out_features
+        self.base_inr_type = base_inr_type
+        self.spatial_interp = spatial_interp
+        self.use_local_coords = use_local_coords
+        self.modulation_type = modulation_type
+
+        self.latent_spatial_dim = int(latent_spatial_dim)
+        self.latent_dim = int(latent_dim)
+        self.hidden_features = hidden_features
+        self.num_layers = num_layers
+
+        meshgrid = make_normalized_pixel_grid(height, width, device=device)
+        s = self.latent_spatial_dim
+        scaled = meshgrid * s
+        cell = torch.floor(scaled).long().clamp(min=0, max=s - 1)   # (N, 2) as [cx, cy]
+        local = scaled - cell.to(scaled.dtype)                       # (N, 2) in [0, 1]
+        cx, cy = cell[:, 0], cell[:, 1]
+        flat_cell = cy * s + cx                                      # (N,) row-major (cy, cx)
+
+        self.register_buffer('meshgrid', meshgrid, persistent=False)
+        self.register_buffer('cell_xy', cell, persistent=False)
+        self.register_buffer('flat_cell', flat_cell, persistent=False)
+        self.register_buffer('local_coords', local, persistent=False)
+
+        if base_inr_type == 'siren':
+            self.fourier = None
+            self.siren = SIREN(
+                hidden_features=hidden_features,
+                num_layers=num_layers,
+                freq=freq,
+                use_shift=True,
+                out_features=out_features,
+                in_features=2,
+            )
+        elif base_inr_type == 'fourier_siren':
+            self.fourier = FourierFeatureEncoding(
+                in_dim=2, num_freqs=fourier_num_freqs, sigma=fourier_sigma,
+                include_input=fourier_include_input,
+            )
+            self.siren = SIREN(
+                hidden_features=hidden_features,
+                num_layers=num_layers,
+                freq=freq,
+                use_shift=True,
+                out_features=out_features,
+                in_features=self.fourier.out_dim,
+            )
+        elif base_inr_type == 'finer':
+            self.fourier = None
+            self.siren = FINER(
+                hidden_features=hidden_features,
+                num_layers=num_layers,
+                freq=freq,
+                use_shift=True,
+                out_features=out_features,
+                in_features=2,
+                first_bias_scale=first_bias_scale,
+                scale_req_grad=scale_req_grad,
+            )
+        else:  # 'fourier_lsa'
+            self.fourier = FourierFeatureEncoding(
+                in_dim=2, num_freqs=fourier_num_freqs, sigma=fourier_sigma,
+                include_input=fourier_include_input,
+            )
+            self.siren = LearnableSpectralNet(
+                hidden_features=hidden_features,
+                num_layers=num_layers,
+                use_shift=True,
+                out_features=out_features,
+                in_features=self.fourier.out_dim,
+                lsa_num_harmonics=lsa_num_harmonics,
+                lsa_init_scale=lsa_init_scale,
+                lsa_include_linear=lsa_include_linear,
+            )
+
+        self.modul = nn.Linear(self.latent_dim, hidden_features * num_layers)
+
+        self.is_spatial = True
+        self.phi_shape = (self.latent_spatial_dim, self.latent_spatial_dim, self.latent_dim)
+        self.phi_numel = self.latent_spatial_dim * self.latent_spatial_dim * self.latent_dim
+        # Kept for parity with classifier / makeset code that reads model.modul_features.
+        self.modul_features = self.phi_numel
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
+
+    def assign_shift(self, shifts_per_pixel):
+        # shifts_per_pixel: (N, hidden * num_layers) -> per-layer (N, hidden)
+        hidden = self.siren.hidden_features
+        for i, layer in enumerate(self.siren.net):
+            layer.shift = shifts_per_pixel[:, i * hidden: (i + 1) * hidden]
+
+    def forward(self, phi):
+        """phi: (s, s, c) latent grid for a single image."""
+        if phi.dim() != 3 or tuple(phi.shape) != self.phi_shape:
+            raise ValueError(
+                f"SpatialModulatedINR expects phi of shape {self.phi_shape}, got {tuple(phi.shape)}"
+            )
+
+        phi_flat = phi.reshape(-1, self.latent_dim)   # (s*s, c)
+        z_cell = phi_flat[self.flat_cell]              # (N, c)
+
+        shifts = self.modul(z_cell)                    # (N, hidden * num_layers)
+        self.assign_shift(shifts)
+
+        coord_in = self.local_coords if self.use_local_coords else self.meshgrid
+        coord_in = coord_in.clone()
+        if self.fourier is not None:
+            coord_in = self.fourier(coord_in)
+        return self.siren(coord_in)
 
 
 # ============================================================
@@ -829,6 +1061,15 @@ class ModulatedSIREN3D(nn.Module):
 
         self.modul_features = modul_features
         self.modul = nn.Linear(modul_features, hidden_features * num_layers)
+
+        self.is_spatial = False
+        self.phi_shape = (modul_features,)
+        self.phi_numel = modul_features
+
+    def init_phi(self, device=None, batch_size=None):
+        target_device = device if device is not None else self.meshgrid.device
+        shape = self.phi_shape if batch_size is None else (batch_size, *self.phi_shape)
+        return torch.zeros(*shape, device=target_device)
 
     def assign_shift(self, shift):
         hidden_features = self.siren.hidden_features

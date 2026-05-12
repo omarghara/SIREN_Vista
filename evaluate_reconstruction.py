@@ -37,7 +37,14 @@ from tqdm import tqdm
 
 from dataloader import get_cifar10_loader, get_mnist_loader
 from dataloader_modelnet import get_modelnet_loader
-from SIREN import ModulatedFourierSIREN, ModulatedSIREN, ModulatedSIREN3D, ModulatedFINER
+from SIREN import (
+    ModulatedFourierSIREN,
+    ModulatedSIREN,
+    ModulatedSIREN3D,
+    ModulatedFINER,
+    ModulatedFourierLSA,
+    SpatialModulatedINR,
+)
 from utils import set_random_seeds
 import variants
 
@@ -257,6 +264,47 @@ def _fit_and_snapshot_lbfgs_batch(model, image_for_loss, image_for_ssim, image_s
     return snapshots
 
 
+def _fit_and_snapshot_sgd_per_image(model, image_for_loss, image_for_ssim, image_shape,
+                                    voxels, step_set, max_step, inner_lr, device):
+    """Slow per-image inner-loop fit; generic for any model exposing init_phi().
+
+    Used for Spatial Functa (phi is (s, s, c), so the SIREN-specific
+    ``batched_forward`` does not apply) and for any non-SIREN backbone
+    where activations aren't plain sines (FINER, LSA, FourierLSA). One
+    image is fit at a time using the model's native ``forward(phi)``.
+
+    Metrics at each requested step are computed batched at the end via
+    ``_metrics_batch`` over the stack of per-image fitted outputs.
+    """
+    B = image_for_loss.shape[0]
+    fitted_at = {s: [] for s in step_set}
+
+    for b in range(B):
+        phi = model.init_phi(device=device).float().detach().requires_grad_(True)
+        optimizer = (optim.Adam if voxels else optim.SGD)([phi], lr=inner_lr)
+        target_b = image_for_loss[b]                  # (N, C) or (N,) for voxel
+        for step in range(1, max_step + 1):
+            optimizer.zero_grad()
+            fitted_b = model(phi)                     # (N, C_out) or (N, 1)
+            if voxels:
+                loss = ((fitted_b.squeeze(-1) - target_b) ** 2).mean()
+            else:
+                loss = ((fitted_b - target_b) ** 2).mean()
+            loss.backward()
+            optimizer.step()
+            if step in step_set:
+                with torch.no_grad():
+                    fitted_at[step].append(model(phi).detach())
+
+    out = {}
+    for s in step_set:
+        fitted_batch = torch.stack(fitted_at[s], dim=0)   # (B, N, C_out)
+        out[s] = _metrics_batch(
+            fitted_batch, image_for_loss, image_for_ssim, image_shape, voxels,
+        )
+    return out
+
+
 def _prep_image_batch(image_batch, voxels, device):
     """Move batch to device and return the shapes the fit loops expect.
 
@@ -284,6 +332,17 @@ def evaluate_split(model, loader, iter_checkpoints, inner_lr, lbfgs, voxels, dev
     max_step = max(iter_checkpoints)
     accum = {s: {'mse': [], 'psnr': [], 'ssim': []} for s in iter_checkpoints}
 
+    # Models whose forward / activation isn't captured by the SIREN-specific
+    # batched_forward path (Spatial Functa, FINER, LSA, FourierLSA) take the
+    # per-image fit path. SIREN / Fourier-SIREN stay on the fast batched path.
+    use_per_image = bool(getattr(model, 'is_spatial', False)) or \
+        type(model).__name__ in ('ModulatedFINER', 'ModulatedLSA', 'ModulatedFourierLSA')
+
+    if use_per_image and lbfgs:
+        print(f"[eval] WARNING: --lbfgs is not supported for {type(model).__name__}; "
+              f"falling back to SGD per-image fit.")
+        lbfgs = False
+
     dataset_size = len(loader.dataset)
     target_samples = dataset_size if max_samples is None else min(max_samples, dataset_size)
     samples_done = 0
@@ -299,7 +358,12 @@ def evaluate_split(model, loader, iter_checkpoints, inner_lr, lbfgs, voxels, dev
 
         image_for_loss, image_for_ssim = _prep_image_batch(image_batch, voxels, device)
 
-        if lbfgs:
+        if use_per_image:
+            snapshots = _fit_and_snapshot_sgd_per_image(
+                model, image_for_loss, image_for_ssim, image_shape, voxels,
+                step_set, max_step, inner_lr, device,
+            )
+        elif lbfgs:
             snapshots = _fit_and_snapshot_lbfgs_batch(
                 model, image_for_loss, image_for_ssim, image_shape, voxels,
                 modul_features, iter_checkpoints, inner_lr, device,
@@ -352,16 +416,44 @@ def get_args():
                         help='Overridden by checkpoint.model_args if present.')
     parser.add_argument('--depth', type=int, default=10,
                         help='Overridden by checkpoint.model_args if present.')
-    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren'], default='siren',
+    parser.add_argument('--inr-type', choices=['siren', 'fourier_siren', 'finer', 'fourier_lsa'],
+                        default='siren',
                         help='Coordinate INR backbone type. Overridden by checkpoint.model_args if present.')
     parser.add_argument('--fourier-num-freqs', type=int, default=64,
-                        help='Number of random Fourier frequencies for --inr-type fourier_siren.')
+                        help='Number of random Fourier frequencies for fourier_* INR types.')
     parser.add_argument('--fourier-sigma', type=float, default=10.0,
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
     parser.add_argument('--siren-freq', type=float, default=30.0,
                         help='SIREN ω0; overridden by checkpoint model_args.freq if present.')
+    parser.add_argument('--finer-freq', type=float, default=30.0,
+                        help='FINER ω0. Overridden by checkpoint model_args.finer_freq if present.')
+    parser.add_argument('--finer-first-bias-scale', type=float, default=1.0,
+                        help='FINER first-layer bias init range U(-scale, scale). '
+                             'Overridden by checkpoint model_args.finer_first_bias_scale.')
+    parser.add_argument('--finer-scale-req-grad', action='store_true', default=False,
+                        help='If set, allow gradients through FINER scale = |z| + 1.')
+    parser.add_argument('--lsa-num-harmonics', type=int, default=8,
+                        help='Number of harmonics K in learnable spectral activation.')
+    parser.add_argument('--lsa-init-scale', type=float, default=1e-3,
+                        help='Init std scale for LSA coefficients.')
+    parser.add_argument('--lsa-no-linear', action='store_true', default=False,
+                        help='If set, remove the identity term u from LSA activation.')
+
+    # Spatial Functa flags; checkpoint.model_args takes precedence at build time.
+    parser.add_argument('--spatial-modulation', action='store_true', default=False,
+                        help='Use a spatial latent grid (Spatial Functa).')
+    parser.add_argument('--latent-spatial-dim', type=int, default=8,
+                        help='Spatial side s of the latent grid (phi has shape (s, s, c)).')
+    parser.add_argument('--latent-dim', type=int, default=16,
+                        help='Per-cell latent channels c of the latent grid.')
+    parser.add_argument('--spatial-interp', choices=['nearest'], default='nearest',
+                        help='Spatial latent interpolation; only nearest (1-NN).')
+    parser.add_argument('--use-local-coords', action='store_true', default=False,
+                        help='Feed per-cell local coordinates instead of global coords.')
+    parser.add_argument('--modulation-type', choices=['shift'], default='shift',
+                        help='Spatial modulation type; only shift.')
     parser.add_argument('--device', type=str,
                         default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--seed', type=int, default=0)
@@ -411,20 +503,38 @@ def _build_model(args, ckpt_model_args, device):
         'finer_freq': args.finer_freq,
         'finer_first_bias_scale': args.finer_first_bias_scale,
         'finer_scale_req_grad': args.finer_scale_req_grad,
+        'lsa_num_harmonics': args.lsa_num_harmonics,
+        'lsa_init_scale': args.lsa_init_scale,
+        'lsa_include_linear': not args.lsa_no_linear,
+        'spatial_modulation': bool(getattr(args, 'spatial_modulation', False)),
+        'latent_spatial_dim': args.latent_spatial_dim,
+        'latent_dim': args.latent_dim,
+        'spatial_interp': args.spatial_interp,
+        'use_local_coords': bool(args.use_local_coords),
+        'modulation_type': args.modulation_type,
     }
     if ckpt_model_args:
-        for k in ('hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',
-                  'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input', 'freq'):
+        override_keys = (
+            'hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',
+            'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input', 'freq',
+            'finer_freq', 'finer_first_bias_scale', 'finer_scale_req_grad',
+            'lsa_num_harmonics', 'lsa_init_scale', 'lsa_include_linear',
+            'spatial_modulation', 'latent_spatial_dim', 'latent_dim',
+            'spatial_interp', 'use_local_coords', 'modulation_type',
+        )
+        for k in override_keys:
             if k in ckpt_model_args and ckpt_model_args[k] != model_args[k]:
                 print(f"[eval] override --{k.replace('_','-')} "
                       f"{model_args[k]} -> {ckpt_model_args[k]} (from checkpoint.model_args)")
                 model_args[k] = ckpt_model_args[k]
     else:
-        print("[eval] checkpoint has no 'model_args'; using CLI --hidden-dim / --mod-dim / --depth.")
+        print("[eval] checkpoint has no 'model_args'; using CLI defaults.")
 
     if args.dataset == 'modelnet':
         if model_args.get('inr_type', 'siren') != 'siren':
-            raise SystemExit("fourier_siren is currently supported for 2D image datasets only.")
+            raise SystemExit("Non-siren backbones are currently 2D-image only.")
+        if model_args.get('spatial_modulation', False):
+            raise SystemExit("Spatial Functa is 2D-image only.")
         H, W, D = 15, 15, 15
         model = ModulatedSIREN3D(
             height=H, width=W, depth=D,
@@ -433,31 +543,90 @@ def _build_model(args, ckpt_model_args, device):
             modul_features=model_args['mod_dim'],
         )
         image_shape = (H, W, D)
-    else:
-        if model_args.get('inr_type', 'siren') == 'fourier_siren':
-            model = ModulatedFourierSIREN(
-                height=model_args['height'], width=model_args['width'],
-                hidden_features=model_args['hidden_dim'],
-                num_layers=model_args['depth'],
-                modul_features=model_args['mod_dim'],
-                device=device,
-                out_features=model_args['out_features'],
-                freq=model_args.get('freq', 30.0),
-                fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
-                fourier_sigma=model_args.get('fourier_sigma', 10.0),
-                fourier_include_input=model_args.get('fourier_include_input', False),
-            )
-        else:
-            model = ModulatedSIREN(
-                height=model_args['height'], width=model_args['width'],
-                hidden_features=model_args['hidden_dim'],
-                num_layers=model_args['depth'],
-                modul_features=model_args['mod_dim'],
-                device=device,
-                out_features=model_args['out_features'],
-                freq=model_args.get('freq', 30.0),
-            )
-        image_shape = (model_args['height'], model_args['width'], model_args['out_features'])
+        return model, model_args, image_shape
+
+    inr_type = model_args.get('inr_type', 'siren')
+    H = model_args['height']
+    W = model_args['width']
+
+    if model_args.get('spatial_modulation', False):
+        model = SpatialModulatedINR(
+            height=H, width=W,
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            latent_spatial_dim=model_args.get('latent_spatial_dim', 8),
+            latent_dim=model_args.get('latent_dim', 16),
+            base_inr_type=inr_type,
+            spatial_interp=model_args.get('spatial_interp', 'nearest'),
+            use_local_coords=model_args.get('use_local_coords', True),
+            modulation_type=model_args.get('modulation_type', 'shift'),
+            freq=model_args.get('freq', 30.0),
+            device=device,
+            out_features=model_args['out_features'],
+            fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+            fourier_sigma=model_args.get('fourier_sigma', 10.0),
+            fourier_include_input=model_args.get('fourier_include_input', False),
+            first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
+            scale_req_grad=model_args.get('finer_scale_req_grad', False),
+            lsa_num_harmonics=model_args.get('lsa_num_harmonics', 8),
+            lsa_init_scale=model_args.get('lsa_init_scale', 1e-3),
+            lsa_include_linear=model_args.get('lsa_include_linear', True),
+        )
+    elif inr_type == 'fourier_siren':
+        model = ModulatedFourierSIREN(
+            height=H, width=W,
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            freq=model_args.get('freq', 30.0),
+            fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+            fourier_sigma=model_args.get('fourier_sigma', 10.0),
+            fourier_include_input=model_args.get('fourier_include_input', False),
+        )
+    elif inr_type == 'fourier_lsa':
+        model = ModulatedFourierLSA(
+            height=H, width=W,
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            fourier_num_freqs=model_args.get('fourier_num_freqs', 64),
+            fourier_sigma=model_args.get('fourier_sigma', 10.0),
+            fourier_include_input=model_args.get('fourier_include_input', False),
+            lsa_num_harmonics=model_args.get('lsa_num_harmonics', 8),
+            lsa_init_scale=model_args.get('lsa_init_scale', 1e-3),
+            lsa_include_linear=model_args.get('lsa_include_linear', True),
+        )
+    elif inr_type == 'finer':
+        model = ModulatedFINER(
+            height=H, width=W,
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            freq=model_args.get('finer_freq', model_args.get('freq', 30.0)),
+            first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
+            scale_req_grad=model_args.get('finer_scale_req_grad', False),
+        )
+    else:  # siren
+        model = ModulatedSIREN(
+            height=H, width=W,
+            hidden_features=model_args['hidden_dim'],
+            num_layers=model_args['depth'],
+            modul_features=model_args['mod_dim'],
+            device=device,
+            out_features=model_args['out_features'],
+            freq=model_args.get('freq', 30.0),
+        )
+
+    image_shape = (H, W, model_args['out_features'])
+    print(f"[build] {type(model).__name__}  is_spatial={getattr(model,'is_spatial',False)}  "
+          f"phi_shape={tuple(getattr(model,'phi_shape',(model_args['mod_dim'],)))}  "
+          f"phi_numel={int(getattr(model,'phi_numel',model_args['mod_dim']))}")
     return model, model_args, image_shape
 
 

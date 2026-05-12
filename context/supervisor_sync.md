@@ -166,7 +166,7 @@ Success criterion for this phase: improve CIFAR reconstruction over vanilla (`PS
 | Per-model PGD JSON/log | `SIREN_Vista/runs/<slug>/pgd_plan/` |
 | Notebooks | `SIREN_Vista/notebooks/model_diagnostics.ipynb` |
 | CIFAR diagnostics notebook | `SIREN_Vista/notebooks/model_reconstruction_tsne_perturbation_cifar10.ipynb` |
-| Scripts | `SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh`, `run_pgd_plan.sh`, `run_pgd_single_model.sh`, `run_vanilla_cifar10_big.sh`, `run_fourier_cifar10.sh` |
+| Scripts | `SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh`, `run_pgd_plan.sh`, `run_pgd_single_model.sh`, `run_vanilla_cifar10_big.sh`, `run_fourier_cifar10.sh`, **`run_spatial_cifar10.sh`** |
 | Ideas | `ideas/robustness_ideas.md` |
 
 ---
@@ -174,3 +174,45 @@ Success criterion for this phase: improve CIFAR reconstruction over vanilla (`PS
 ## 8. One-line summary for the meeting
 
 “We now have a **proper vanilla e40 baseline** and a **matched Full-PGD \(\varepsilon\) sweep**: vanilla **wins** robust accuracy at \(\varepsilon=8\) and **16**, softlip **wins** at **32** and **64** — so the thesis story is **nuanced**, not ‘softlip beats vanilla everywhere’. On CIFAR-10, vanilla SIREN reconstruction/classification is weak (~18.8 dB PSNR@200, ~47% top-1), so I added a controlled **Fourier-SIREN INR** path to test whether better coordinate features improve reconstruction and `phi` quality before revisiting robustness.”
+
+---
+
+## 9. Latest development — Spatial Functa (May 2026)
+
+Implemented **Spatial Functa** (Dupont et al. 2022 Sec. 4 + App. C.1) as an optional,
+backwards-compatible extension of the existing functa pipeline.
+
+### Core idea
+
+Replace the global modulation vector `phi ∈ ℝ^{mod_dim}` with a **spatial latent grid**
+`phi ∈ ℝ^{s×s×c}`. Each pixel gets its latent code from the nearest grid cell (1-NN),
+feeds it through a per-pixel `Linear(c, L*hidden)` to produce per-pixel shifts, and the
+INR backbone runs with those local shifts. Paper Table 4 CIFAR-10 config: `s=8, c=16`
+→ `phi_numel=1024`.
+
+### Files changed
+
+| File | What changed |
+|------|--------------|
+| `SIREN.py` | New `SpatialModulatedINR`; `init_phi` / `phi_shape` / `phi_numel` / `is_spatial` on all existing classes; per-pixel shifts in all three affine types |
+| `trainer.py` | Spatial CLI flags; `_build_2d_model` dispatch; `fit()` via `model.init_phi()` |
+| `makeset.py` | Same; functaset entries carry `phi_shape` + `is_spatial` |
+| `train_classifier.py` | `_flatten_modulations` helper; `--classifier-type` flag |
+| `evaluate_reconstruction.py` | Spatial + FINER + FourierLSA branches; slow per-image inner loop |
+| `scripts/run_spatial_cifar10.sh` | **New** end-to-end pipeline (paper `d=6, h=256, 8×8×16`) |
+
+All spatial behavior gated behind `--spatial-modulation` (default off). Existing MNIST /
+CIFAR vanilla / softlip pipelines are **unchanged** — confirmed by smoke tests across all
+phases A → J.
+
+### Expected sanity output (run at model-build time via `[build]` prints)
+
+```
+[build] SpatialModulatedINR  base_inr_type=siren  is_spatial=True  phi_shape=(8, 8, 16)  phi_numel=1024
+```
+
+### Next step
+
+Run `bash ~/SIREN_Vista/scripts/run_spatial_cifar10.sh` (paper `depth=6`).
+Success target: PSNR@200 > 20 dB (vs vanilla ≈18.8 dB) and classifier accuracy > 47%.
+A `depth=10` config is commented at the top of the script for the follow-up.

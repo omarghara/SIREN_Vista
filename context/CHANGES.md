@@ -352,6 +352,138 @@ Output shape is `(H*W, 2)` with columns `[x, y]`. Uses `torch.meshgrid` with `in
 
 **Backward compatibility.** Only new checkpoints contain `coord_normalization`. Loading old checkpoints is unaffected. The coordinate change is a training-time ablation; any checkpoint trained before this change used unnormalized coordinates and must be retrained for a fair comparison.
 
+## 15. Spatial Functa — spatial latent-grid INR representation
+
+**Reference:** From Data to Functa (Dupont et al. 2022, arXiv:2201.12204), Sec. 4 + App. C.1.
+
+### Motivation
+
+The global Functa pipeline encodes each signal as a single flat vector `phi ∈ ℝ^{mod_dim}`.
+Spatial Functa replaces this with a **spatial latent grid** `phi ∈ ℝ^{s×s×c}` whose cells hold local
+codes for image patches. This can improve reconstruction fidelity for higher-resolution or
+higher-frequency signals (e.g. CIFAR-10 colour images) and maintains a natural spatial
+inductive bias.
+
+### Design (paper's 1-NN row, Table 4)
+
+```
+global coord in [0,1]²
+   ↓  1-NN: cell (cy, cx) = floor(coord * s)
+phi[cy, cx, :]           ← per-pixel latent z (N, c)
+   ↓  per-pixel Linear(c → L*hidden)
+per-pixel shifts (N, L*hidden)
+   ↓  applied inside each SineAffine / FinerAffine / SpectralAffine
+local coord in [0,1]  ←  coord*s − cell  (optional; paper default)
+   ↓  [optional FourierFeatureEncoding]  → backbone hidden layers
+rgb output (N, out_features)
+```
+
+### Files changed
+
+**`SIREN.py`** — three sets of changes:
+
+*Phase A — `init_phi` / `phi_shape` / `phi_numel` / `is_spatial` API added to every
+existing `Modulated*` class.* For all existing classes `is_spatial=False`,
+`phi_shape=(modul_features,)`, `phi_numel=modul_features`. The new `init_phi(device,
+batch_size)` method returns a zero tensor of the correct shape. No behavioural change.
+
+*Phase B — per-pixel shifts in `SineAffine.forward`, `FinerAffine.forward`,
+`SpectralAffine.forward`.* The `+ self.shift.unsqueeze(0)` pattern was replaced by
+`+ self.shift`. Now `self.shift` can be either `(hidden,)` (global, existing behaviour —
+numerically bit-exact, verified) or `(N, hidden)` (spatial, per-pixel).
+
+*Phase C — new `SpatialModulatedINR` wrapper class.* Registered buffers `flat_cell`
+`(N,)`, `local_coords (N, 2)`, `meshgrid (N, 2)` are pre-computed in `__init__`. Supports
+`base_inr_type ∈ {siren, fourier_siren, finer, fourier_lsa}`. Exposes the same
+`is_spatial=True`, `phi_shape=(s,s,c)`, `phi_numel=s*s*c`, `modul_features=s*s*c`,
+`init_phi`, `forward(phi)` API as the global classes.
+
+**`trainer.py`** — Phase D:
+
+- Imports `SpatialModulatedINR`.
+- `_build_2d_model` branches to `SpatialModulatedINR` when `args.spatial_modulation` is set;
+  emits a `[build]` sanity line (phase J) in both branches.
+- `fit()` inner loop now calls `model.init_phi(device=device)` instead of
+  `torch.zeros(modul_features)`. Works for both global `(mod_dim,)` and spatial `(s,s,c)` phi.
+- New CLI flags (all default off → existing global pipelines unchanged):
+  `--spatial-modulation`, `--latent-spatial-dim 8`, `--latent-dim 16`,
+  `--spatial-interp nearest`, `--use-local-coords`, `--modulation-type shift`.
+- Checkpoint `model_args` now records all spatial fields:
+  `spatial_modulation`, `latent_spatial_dim`, `latent_dim`, `spatial_interp`,
+  `use_local_coords`, `modulation_type`, `is_spatial`, `phi_shape`, `phi_numel`.
+
+**`makeset.py`** — Phase E:
+
+- Imports `SpatialModulatedINR`; same CLI flags as trainer.
+- `_model_args_from_checkpoint` extended with spatial keys (checkpoint values override CLI).
+- `_build_2d_model` dispatches to `SpatialModulatedINR` when `spatial_modulation=True`.
+- `create_functaset` uses `model.init_phi(device=device)`.
+- Each functaset entry now records `is_spatial` and `phi_shape` alongside `modul`.
+  For spatial runs `modul` has shape `(s, s, c)` (NumPy array); for global runs it is `(mod_dim,)` as before.
+
+**`dataloader.py`** — Phase F: **no edits needed.** `torch.tensor(pair['modul'])` and
+`torch.stack(moduls)` already handle ND arrays. A batch of spatial entries arrives as
+`(B, s, s, c)`.
+
+**`train_classifier.py`** — Phase G:
+
+- New helper `_flatten_modulations(images)`: reshapes `(B, s, s, c) → (B, s*s*c)`,
+  no-op for `(B, mod_dim)`.
+- `train_classifier` and `eval_classifier` call `_flatten_modulations` before the MLP.
+- New CLI arg `--classifier-type mlp` (only option so far; hook for future CNN / 1×1-conv head).
+- `train_classifier.py` now flattens spatial batches transparently; the downstream MLP in
+  `Classifier` is unchanged — `in_features` must equal `s*s*c` for spatial runs.
+
+**`evaluate_reconstruction.py`** — Phase H:
+
+- Imports `ModulatedFourierLSA`, `SpatialModulatedINR` (these were missing).
+- `_build_model` extended with FINER, FourierLSA, and spatial branches; all spatial fields
+  are read from `ckpt_model_args` with override prints.
+- New `--finer-*`, `--lsa-*`, and spatial CLI flags mirror trainer/makeset.
+- `--inr-type` choices extended to `{siren, fourier_siren, finer, fourier_lsa}`.
+- New function `_fit_and_snapshot_sgd_per_image`: slow but correct per-image inner loop
+  using `model.init_phi()` + `model.forward(phi)`. Used for spatial models and any backbone
+  whose activations are not plain sines (FINER, LSA, FourierLSA).
+- `evaluate_split` routes to `_fit_and_snapshot_sgd_per_image` when
+  `model.is_spatial or type(model).__name__ in ('ModulatedFINER', …)`, and to the fast
+  `_fit_and_snapshot_sgd_batch` / LBFGS paths otherwise.
+
+**`scripts/run_spatial_cifar10.sh`** — Phase I: new end-to-end pipeline script.
+
+- Paper-aligned first-reproduction config: `HIDDEN_DIM=256`, `DEPTH=6`, `SIREN_FREQ=30`,
+  `LATENT_SPATIAL_DIM=8`, `LATENT_DIM=16`, `SPATIAL_INTERP=nearest`, `USE_LOCAL_COORDS=1`,
+  `INNER_STEPS=3`, `INNER_OPTIM=sgd`, `EXT_LR=3e-5`.
+- 5-step pipeline: train → makeset → combine train+val → classifier → reconstruction eval.
+- Post-train checkpoint verifier asserts `is_spatial=True`, `phi_shape=(8,8,16)`, `phi_numel=1024`.
+- Commented `DEPTH=10` block at top for the follow-up run.
+
+### Verified sanity checks (Phase J)
+
+All assertions from the user's expected-output spec:
+
+| Check | Expected | Actual |
+|---|---|---|
+| CIFAR spatial `phi_shape` | `(8, 8, 16)` | `(8, 8, 16)` |
+| `phi_numel` | `1024` | `1024` |
+| `model(phi).shape` | `(1024, 3)` | `(1024, 3)` |
+| functaset batch shape | `(B, 8, 8, 16)` | `(4, 8, 8, 16)` |
+| MLP input after flatten | `(B, 1024)` | `(4, 1024)` |
+| 1-batch trainer fit | OK | OK |
+| 1-image makeset | OK | OK |
+| 1-image reconstruction eval | OK | OK |
+| 1-batch classifier | OK | OK |
+| MNIST spatial `phi_shape` | `(7, 7, 16)` | `(7, 7, 16)` |
+| global path unchanged | `phi_shape=(128,)` | `phi_shape=(128,)` |
+
+### Backwards compatibility
+
+- `--spatial-modulation` defaults to `False` → every existing script, checkpoint, and pickle
+  is unaffected.
+- Old checkpoints (no `spatial_modulation` key in `model_args`) are handled by
+  `dict.get('spatial_modulation', False)` everywhere.
+- Old global pickles (1D `modul` array) load correctly via `dataloader.py` as before.
+- New spatial pickles (ND `modul` array) also load correctly with the same code.
+
 ## 13. CIFAR-10 support and Fourier-SIREN INR backbone
 
 **Files.** `SIREN_Vista/{SIREN.py,dataloader.py,trainer.py,makeset.py,train_classifier.py,evaluate_reconstruction.py}` and `SIREN_Vista/scripts/{run_soft_cifar10.sh,run_vanilla_cifar10_big.sh,run_fourier_cifar10.sh}`.

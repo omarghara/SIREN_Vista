@@ -46,6 +46,17 @@ class Classifier(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+def _flatten_modulations(images):
+    """Flatten ND modulations to 2D for MLP input.
+
+    Global Functa modulations are already (B, in_features). Spatial Functa
+    modulations arrive as (B, s, s, c) and must be reshaped to (B, s*s*c).
+    """
+    if images.dim() > 2:
+        return images.reshape(images.size(0), -1)
+    return images
+
+
 def train_classifier(model, train_loader, optimizer, criterion, epoch):
     """
     :param model:
@@ -62,6 +73,7 @@ def train_classifier(model, train_loader, optimizer, criterion, epoch):
     prog_bar = tqdm(train_loader, total=len(train_loader))
     for images, labels in prog_bar:
         images, labels = images.to(device), labels.to(device)
+        images = _flatten_modulations(images)
         preds = model(images)
         loss = criterion(preds, labels)
         losses.append(loss.item())
@@ -91,6 +103,7 @@ def eval_classifier(model, val_loader, epoch):
 
     for images, labels in prog_bar:
         images, labels = images.to(device), labels.to(device)
+        images = _flatten_modulations(images)
         preds = model(images)
         top1acc_batch, top5acc_batch = get_accuracy(preds, labels, top_k=(1, 5))
         top1acc.update(top1acc_batch, labels.size(0))
@@ -116,6 +129,10 @@ def get_args():
     parser.add_argument('--functaset-path-train', type=str, help='path to optimized training Functaset')
     parser.add_argument('--functaset-path-test', type=str, help='path to optimized test Functaset')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Pass "cuda" to use gpu')
+    parser.add_argument('--classifier-type', choices=['mlp'], default='mlp',
+                        help='Downstream classifier head. Only the existing flat MLP '
+                             'is implemented; spatial Functa modulations are flattened '
+                             'to (B, s*s*c) before this MLP. Future: cnn / 1x1 conv.')
     return parser.parse_args()
 if __name__ == '__main__':
     

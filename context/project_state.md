@@ -28,22 +28,25 @@ All paths are absolute.
 ├── ideas/
 │   └── robustness_ideas.md           # 24 ranked research ideas (categories A–J)
 ├── SIREN_Vista/                      # local working copy — edit here
-│   ├── SIREN.py                      # ModulatedSIREN, ModulatedSIREN3D, SineAffine
-│   ├── trainer.py                    # meta-training (+ resume + variants + sigma log)
-│   ├── makeset.py                    # functaset creation (+ variants)
-│   ├── train_classifier.py           # downstream classifier (variant-agnostic)
-│   ├── evaluate_reconstruction.py    # MSE/PSNR/SSIM vs inner-loop iters
+│   ├── SIREN.py                      # all Modulated* classes + SpatialModulatedINR
+│   ├── trainer.py                    # meta-training (+ resume + variants + sigma log + spatial)
+│   ├── makeset.py                    # functaset creation (+ variants + spatial)
+│   ├── train_classifier.py           # downstream classifier (+ ND flatten for spatial)
+│   ├── evaluate_reconstruction.py    # MSE/PSNR/SSIM vs inner-loop iters (+ spatial per-image path)
 │   ├── diagnostics.py                # per-layer spectral-norm helpers
-│   ├── dataloader.py                 # MNIST / Fashion-MNIST loaders + functaset
+│   ├── dataloader.py                 # MNIST / CIFAR-10 loaders + Functaset (ND-compatible)
 │   ├── dataloader_modelnet.py        # ModelNet10
 │   ├── utils.py                      # seeding, LR schedule, metrics
 │   ├── attacks/                      # attack suite (not yet modified)
 │   ├── scripts/                      # end-to-end pipeline scripts
-│   │   └── run_soft_lipschitz_mnist.sh
+│   │   ├── run_soft_lipschitz_mnist.sh
+│   │   ├── run_fourier_cifar10.sh
+│   │   ├── run_vanilla_cifar10_big.sh
+│   │   └── run_spatial_cifar10.sh    # *** new: Spatial Functa CIFAR-10 pipeline ***
 │   └── variants/                     # ***variant plug-in registry***
 │       ├── __init__.py
 │       ├── vanilla.py                # no-op default
-│       └── soft_lipschitz.py         # first real variant
+│       └── soft_lipschitz.py         # soft Lipschitz penalty variant
 ├── Parameter-Space-Attack-Suite/     # pristine upstream clone, do not edit
 └── data/                             # datasets
 ```
@@ -110,6 +113,40 @@ Standalone script that **re-fits** modulations on train/test and reports MSE, PS
 - Wired as Step 4/4 of [SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh](SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh); bash knobs: `EVAL_ITERS`, `EVAL_MAX_SAMPLES` (default 2000 per split — set blank for full eval).
 - See `CHANGES.md` §8 for the full design rationale, citing [SIREN paper](https://arxiv.org/abs/2006.09661) and [Functa paper](https://arxiv.org/abs/2201.12204).
 
+### Spatial Functa (CHANGES.md §15)
+
+Implements the spatial latent-grid representation from From Data to Functa (Dupont et al.
+2022, arXiv:2201.12204). The key addition is `SpatialModulatedINR` in `SIREN.py`: instead
+of a single global modulation vector `phi ∈ ℝ^{mod_dim}`, the signal is represented by a
+spatial grid `phi ∈ ℝ^{s×s×c}`. A 1-NN lookup maps each pixel coordinate to its cell, a
+shared `Linear(c, L*hidden)` produces per-pixel shifts, and optional per-cell local
+coordinates are fed to the INR backbone.
+
+Key design points:
+
+- **Backwards-compatible API.** All existing `Modulated*` classes now expose `is_spatial=False`,
+  `phi_shape=(modul_features,)`, `phi_numel`, and `init_phi(device, batch_size)`. No behaviour
+  change to existing pipelines.
+- **Per-pixel shift broadcasting.** `SineAffine.forward`, `FinerAffine.forward`, and
+  `SpectralAffine.forward` accept either a 1D `(hidden,)` shift (global, bit-exact) or a
+  2D `(N, hidden)` per-pixel shift. No conditional logic needed.
+- **Four backbones** supported inside `SpatialModulatedINR`:
+  `siren`, `fourier_siren`, `finer`, `fourier_lsa`.
+- **Fully wired end-to-end:** `trainer.py`, `makeset.py`, `train_classifier.py`, and
+  `evaluate_reconstruction.py` all handle spatial phi transparently. `dataloader.py` needed
+  no edits (existing code already handles ND tensors).
+- **Slow per-image eval path** in `evaluate_reconstruction.py` (v1; correct first, optimize
+  later) for spatial models and non-SIREN backbones.
+- **New pipeline script:** `scripts/run_spatial_cifar10.sh` — paper Table 4 config:
+  `hidden_dim=256`, `depth=6`, `s=8`, `c=16`, `ω₀=30`, 10 epochs, SGD inner loop.
+  Includes a commented `depth=10` config for the follow-up.
+
+Verified: `phi_shape=(8,8,16)`, `phi_numel=1024`, `model(phi).shape=(1024,3)`,
+functaset batch `(B,8,8,16)`, MLP input after flatten `(B,1024)`.
+MNIST variant: `phi_shape=(7,7,16)`, `phi_numel=784`, `model(phi).shape=(784,1)`.
+
+All spatial behaviour is gated behind `--spatial-modulation` (default off).
+
 ### CIFAR-10 + INR backbone choice
 
 CIFAR-10 is now partially wired into the functa stack as RGB `32x32` images:
@@ -154,7 +191,7 @@ Latest verification for CIFAR/Fourier work:
 - Fourier-SIREN smoke test produced RGB output `(1024, 3)` and batched eval output `(B, 1024, 3)`.
 - Checkpoint rebuild smoke test verified that `makeset.py` / `evaluate_reconstruction.py` override CLI defaults from checkpoint `model_args` and correctly rebuild `fourier_siren`.
 
-## 5. What has NOT been built yet
+## 5. What has NOT been built yet (as of Spatial Functa PR)
 
 ### Robustness directions (from `/home/omarg/ideas/robustness_ideas.md`)
 
@@ -195,6 +232,9 @@ No adaptive-attack evaluation has been plumbed yet. The `attacks/` directory is 
 ## 7. Fast commands reference
 
 ```bash
+# Run the Spatial Functa CIFAR-10 end-to-end pipeline (paper config, depth=6):
+bash ~/SIREN_Vista/scripts/run_spatial_cifar10.sh
+
 PY=~/miniforge3/envs/pss/bin/python
 
 # Train vanilla for 6 epochs on MNIST
@@ -234,7 +274,8 @@ bash ~/SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh
 
 - The plan file for the resume feature: `.cursor/plans/resume_training_in_siren_trainer_*.plan.md`.
 - The plan file for the variants infrastructure: `.cursor/plans/siren_variants_infrastructure_plus_soft_lipschitz_*.plan.md`.
-- Full change log from this session: `context/CHANGES.md`.
+- The Spatial Functa plan: `.cursor/plans/spatial_functa_for_siren_vista_a0cc4da4.plan.md`.
+- Full change log from this session: `context/CHANGES.md` (§15 = Spatial Functa).
 - Robustness idea catalog: `ideas/robustness_ideas.md`.
 - Thesis-level scientific brief: `context/cursor_context.md`.
 - Long-form literature + math background: `context/chatgpt_deep_search.md`.

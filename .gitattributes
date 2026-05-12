@@ -1,3 +1,6 @@
+# Shell scripts must use LF (CRLF breaks shebang on Linux).
+*.sh text eol=lf
+
 runs/**/functaset/*.pkl filter=lfs diff=lfs merge=lfs -text
 model_mnist/**/*.pth filter=lfs diff=lfs merge=lfs -text
 model_cifar10/**/*.pth filter=lfs diff=lfs merge=lfs -text

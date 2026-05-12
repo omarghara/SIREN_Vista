@@ -9,6 +9,7 @@ from SIREN import (
     ModulatedSIREN3D,
     ModulatedFINER,
     ModulatedFourierLSA,
+    SpatialModulatedINR,
 )
 from utils import adjust_learning_rate
 from tqdm import tqdm
@@ -25,8 +26,37 @@ def _prep_2d_batch(images, device):
 
 
 def _build_2d_model(args, height, width, out_features):
+    if getattr(args, 'spatial_modulation', False):
+        model = SpatialModulatedINR(
+            height=height,
+            width=width,
+            hidden_features=args.hidden_dim,
+            num_layers=args.depth,
+            latent_spatial_dim=args.latent_spatial_dim,
+            latent_dim=args.latent_dim,
+            base_inr_type=args.inr_type,
+            spatial_interp=args.spatial_interp,
+            use_local_coords=args.use_local_coords,
+            modulation_type=args.modulation_type,
+            freq=args.siren_freq,
+            device=args.device,
+            out_features=out_features,
+            fourier_num_freqs=args.fourier_num_freqs,
+            fourier_sigma=args.fourier_sigma,
+            fourier_include_input=args.fourier_include_input,
+            first_bias_scale=args.finer_first_bias_scale,
+            scale_req_grad=args.finer_scale_req_grad,
+            lsa_num_harmonics=args.lsa_num_harmonics,
+            lsa_init_scale=args.lsa_init_scale,
+            lsa_include_linear=not args.lsa_no_linear,
+        )
+        print(f"[build] {type(model).__name__}  base_inr_type={model.base_inr_type}  "
+              f"is_spatial={model.is_spatial}  phi_shape={tuple(model.phi_shape)}  "
+              f"phi_numel={int(model.phi_numel)}")
+        return model
+
     if args.inr_type == 'fourier_siren':
-        return ModulatedFourierSIREN(
+        model = ModulatedFourierSIREN(
             height=height,
             width=width,
             hidden_features=args.hidden_dim,
@@ -39,9 +69,8 @@ def _build_2d_model(args, height, width, out_features):
             fourier_sigma=args.fourier_sigma,
             fourier_include_input=args.fourier_include_input,
         )
-
-    if args.inr_type == 'fourier_lsa':
-        return ModulatedFourierLSA(
+    elif args.inr_type == 'fourier_lsa':
+        model = ModulatedFourierLSA(
             height=height,
             width=width,
             hidden_features=args.hidden_dim,
@@ -56,9 +85,8 @@ def _build_2d_model(args, height, width, out_features):
             lsa_init_scale=args.lsa_init_scale,
             lsa_include_linear=not args.lsa_no_linear,
         )
-
-    if args.inr_type == 'finer':
-        return ModulatedFINER(
+    elif args.inr_type == 'finer':
+        model = ModulatedFINER(
             height=height,
             width=width,
             hidden_features=args.hidden_dim,
@@ -70,20 +98,23 @@ def _build_2d_model(args, height, width, out_features):
             first_bias_scale=args.finer_first_bias_scale,
             scale_req_grad=args.finer_scale_req_grad,
         )
-
-    if args.inr_type != 'siren':
+    elif args.inr_type == 'siren':
+        model = ModulatedSIREN(
+            height=height,
+            width=width,
+            hidden_features=args.hidden_dim,
+            num_layers=args.depth,
+            modul_features=args.mod_dim,
+            device=args.device,
+            out_features=out_features,
+            freq=args.siren_freq,
+        )
+    else:
         raise ValueError(f"Unknown --inr-type {args.inr_type!r}")
 
-    return ModulatedSIREN(
-        height=height,
-        width=width,
-        hidden_features=args.hidden_dim,
-        num_layers=args.depth,
-        modul_features=args.mod_dim,
-        device=args.device,
-        out_features=out_features,
-        freq=args.siren_freq,
-    )
+    print(f"[build] {type(model).__name__}  is_spatial={model.is_spatial}  "
+          f"phi_shape={tuple(model.phi_shape)}  phi_numel={int(model.phi_numel)}")
+    return model
 
 
 def fit(
@@ -124,7 +155,6 @@ def fit(
     mse_losses = []
     pen_losses = []
     device = next(iter(model.parameters())).device
-    modul_features = model.modul_features
     inner_criterion = nn.MSELoss().cuda() if torch.cuda.is_available() else nn.MSELoss()
     prog_bar = tqdm(data_loader, total=len(data_loader))
     for batch_idx, (images, labels) in enumerate(prog_bar):
@@ -133,8 +163,10 @@ def fit(
         modulators = []
         # Inner loop.
         for batch_id in range(batch_size):
-            modulator = torch.zeros(modul_features).float().to(device)
-            modulator.requires_grad=True
+            # model.init_phi() returns a zero tensor matching this model's phi_shape:
+            # (modul_features,) for global Functa, (s, s, c) for Spatial Functa.
+            modulator = model.init_phi(device=device).float()
+            modulator.requires_grad = True
             if voxels:
                 inner_optimizer = optim.Adam([modulator], lr=inner_lr)
             else:
@@ -259,6 +291,26 @@ def get_args():
                     help='Number of inner-loop phi adaptation steps during meta-training.')
     parser.add_argument('--inner-optim', choices=['sgd', 'adam'], default='sgd',
                     help='Optimizer for inner-loop phi adaptation during meta-training.')
+
+    # Spatial Functa flags. All default off => existing global Functa behavior unchanged.
+    parser.add_argument('--spatial-modulation', action='store_true', default=False,
+                        help='Use a spatial latent grid (Spatial Functa) instead of a '
+                             'single global modulation vector. When set, --inr-type '
+                             'selects the underlying backbone.')
+    parser.add_argument('--latent-spatial-dim', type=int, default=8,
+                        help='Spatial side s of the latent grid (phi has shape (s, s, c)). '
+                             'Used only when --spatial-modulation is set.')
+    parser.add_argument('--latent-dim', type=int, default=16,
+                        help='Per-cell latent channels c of the latent grid (phi has '
+                             'shape (s, s, c)). Used only when --spatial-modulation is set.')
+    parser.add_argument('--spatial-interp', choices=['nearest'], default='nearest',
+                        help='Spatial latent interpolation. Only nearest (1-NN) is supported.')
+    parser.add_argument('--use-local-coords', action='store_true', default=False,
+                        help='If set, feed each pixel its local coordinate (coord*s - cell) '
+                             'in [0, 1] instead of the global coordinate. Paper default.')
+    parser.add_argument('--modulation-type', choices=['shift'], default='shift',
+                        help='Spatial modulation type. Only shift is supported.')
+
     variants.add_all_variant_args(parser)
     return parser.parse_args()
 
@@ -363,6 +415,15 @@ if __name__ == '__main__':
                             'lsa_num_harmonics': args.lsa_num_harmonics,
                             'lsa_init_scale': args.lsa_init_scale,
                             'lsa_include_linear': not args.lsa_no_linear,
+                            'spatial_modulation': bool(getattr(args, 'spatial_modulation', False)),
+                            'latent_spatial_dim': args.latent_spatial_dim,
+                            'latent_dim': args.latent_dim,
+                            'spatial_interp': args.spatial_interp,
+                            'use_local_coords': bool(args.use_local_coords),
+                            'modulation_type': args.modulation_type,
+                            'is_spatial': bool(getattr(modSiren, 'is_spatial', False)),
+                            'phi_shape': tuple(getattr(modSiren, 'phi_shape', (args.mod_dim,))),
+                            'phi_numel': int(getattr(modSiren, 'phi_numel', args.mod_dim)),
                         },
                         }, f'{savedir}/modSiren.pth')
 
