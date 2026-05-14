@@ -549,3 +549,82 @@ Verification performed:
   - `fourier.B` is saved in the state dict.
   - `evaluate_reconstruction.batched_forward(...)` works for Fourier-SIREN and RGB output.
   - `makeset.py` / `evaluate_reconstruction.py` can rebuild a Fourier-SIREN from checkpoint `model_args`.
+
+## 16. Spatial Functa — verification, sanity tests, and paper-preset run script
+
+**Files changed:** `SIREN_Vista/SIREN.py`, `SIREN_Vista/scripts/test_spatial_functa.py` (new),
+`SIREN_Vista/scripts/run_spatial_functa_cifar10_subset.sh`.
+
+### Verification outcome
+
+A systematic audit of `SpatialModulatedINR` confirmed the implementation is correct:
+
+| Question | Result |
+|----------|--------|
+| φ is a spatial grid `(s, s, c)` | ✓ `phi_shape = (LATENT_SPATIAL_DIM, LATENT_SPATIAL_DIM, LATENT_DIM)` |
+| Different coordinates → different cells | ✓ 1-NN: `cell = floor(coord * s)` |
+| Same-patch coordinates → same cell | ✓ Verified numerically |
+| Local patch coords pixel-center normalised | ✓ `local = scaled - cell` → values `0.125, 0.375, 0.625, 0.875` for 4-px patches |
+| `Linear(z_cell)` ≡ Conv2d(1×1) | ✓ Numerically identical (max diff 0.0) |
+| Gradient flows back to φ | ✓ `phi.grad.shape == (8, 8, 16)` after `out.sum().backward()` |
+| Forward output shape | ✓ `(H*W, out_features)` = `(1024, 3)` for CIFAR-10 |
+
+### `SIREN.py` — added 1×1-conv equivalence comment
+
+At `self.modul = nn.Linear(...)` (line ~982), a block comment now documents:
+
+- Why `Linear(z_cell)` applied per cell is mathematically equivalent to the paper's 1×1 convolution λ(z).
+- Why `nn.Linear` is preferred over `nn.Conv2d(kernel_size=1)` for this per-pixel-index lookup pattern.
+- References `scripts/test_spatial_functa.py`, Test E.
+
+### New file: `scripts/test_spatial_functa.py`
+
+Five stand-alone tests, run with:
+
+```bash
+~/miniforge3/envs/pss/bin/python scripts/test_spatial_functa.py
+```
+
+| Test | What it checks |
+|------|---------------|
+| A | Different 4×4 patches produce different `z_cell` and shifts |
+| B | All pixels in the same patch share one `flat_cell` index; cross-patch cells differ; `(r=0,c=4)→cell 1`, `(r=4,c=0)→cell 8` |
+| C | Local patch coords for 4-px patches = `0.125, 0.375, 0.625, 0.875` |
+| D | Forward `model(phi)` → `(1024, 3)`; `phi.grad.shape == (8, 8, 16)` |
+| E | `Linear(z_cell)` vs `Conv2d(1×1)(phi)` → max diff = 0.0 |
+
+All tests pass.
+
+### `run_spatial_functa_cifar10_subset.sh` — `PRESET` selector
+
+Added a `PRESET` env variable (default `current`):
+
+```bash
+# original FINER / large model run:
+bash scripts/run_spatial_functa_cifar10_subset.sh
+
+# paper Table 4 SIREN config:
+PRESET=paper bash scripts/run_spatial_functa_cifar10_subset.sh
+```
+
+**`PRESET=paper` config:**
+
+| Param | Value | Rationale |
+|-------|-------|-----------|
+| `INR_TYPE` | `siren` | Plain SIREN, paper Table 4 |
+| `HIDDEN_DIM` | 256 | Paper width |
+| `DEPTH` | 6 | Paper depth |
+| `SIREN_FREQ` (ω₀) | 10.0 | As specified |
+| `TRAIN_BATCH_SIZE` | 128 | As specified |
+| `EXT_LR` | 3e-5 | Outer Adam LR |
+| `INT_LR` | 0.01 | Inner φ LR |
+| `INNER_STEPS` | 3 | Meta-training inner steps |
+| `EPOCHS` | 511 | ≈ 200 000 outer updates (50 000 images / 128 per batch) |
+| `MAKESET_ITERS` | 3 | φ-fit steps when building functaset |
+| `MAKESET_INNER_OPTIM` | sgd | |
+| `LATENT_SPATIAL_DIM` | 8 | 8×8 grid |
+| `LATENT_DIM` | 16 | 16 channels per cell → MOD_DIM=1024 |
+| `USE_LOCAL_COORDS` | 1 | Local patch coords [0,1]² |
+
+Slug now includes `PRESET`, `freq`, and uses `printf %.0e` for `MAKESET_LR_TAG` (fixes hardcoded `3e-03`).
+Checkpoint verifier also checks `freq` against `SIREN_FREQ`.

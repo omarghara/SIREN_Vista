@@ -25,6 +25,9 @@ FINER_FIRST_BIAS_SCALE=2.0
 FINER_SCALE_REQ_GRAD=0
 
 # ---- meta-training hyperparameters ------------------------------------------
+# Per-batch inner fit of phi during meta-training (trainer.py --inner-optim).
+# Distinct from MAKESET_INNER_OPTIM (functaset / makeset.py --inner-optim).
+META_INNER_OPTIM=sgd       # sgd | adam  →  passed as --inner-optim
 
 EPOCHS=5
 INT_LR=0.01
@@ -56,6 +59,11 @@ CLF_EPOCHS=120
 
 # -----------------------------------------------------------------------------
 
+if [[ "${META_INNER_OPTIM}" != "sgd" && "${META_INNER_OPTIM}" != "adam" ]]; then
+    echo "ERROR: META_INNER_OPTIM must be 'sgd' or 'adam', got: ${META_INNER_OPTIM}" >&2
+    exit 1
+fi
+
 EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
 BIAS_TAG=$(printf "%g" "${FINER_FIRST_BIAS_SCALE}" | tr '.' 'p')
 MAKESET_LR_TAG="3e-03"
@@ -66,7 +74,7 @@ else
     SCALE_TAG="scaledetach"
 fi
 
-SLUG="functa_like_cifar10_finer_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_freq${FINER_FREQ}_bias${BIAS_TAG}_${SCALE_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
+SLUG="functa_like_cifar10_finer_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_freq${FINER_FREQ}_bias${BIAS_TAG}_${SCALE_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -106,6 +114,7 @@ echo "scale grad    = ${FINER_SCALE_REQ_GRAD}"
 echo "meta epochs   = ${EPOCHS}"
 echo "meta int_lr   = ${INT_LR}"
 echo "meta ext_lr   = ${EXT_LR}"
+echo "meta inner optim = ${META_INNER_OPTIM}  (trainer.py --inner-optim)"
 echo "inner steps   = ${INNER_STEPS}"
 echo "make iters    = ${MAKESET_ITERS}"
 echo "make optim    = ${MAKESET_INNER_OPTIM}"
@@ -138,6 +147,7 @@ python trainer.py \
     --mod-dim "${MOD_DIM}" \
     --depth "${DEPTH}" \
     --inner-steps "${INNER_STEPS}" \
+    --inner-optim "${META_INNER_OPTIM}" \
     "${INR_FLAGS[@]}" \
     --model-name "${SLUG}" \
     "${VARIANT_FLAGS[@]}" \
@@ -184,6 +194,7 @@ checks = {
     "hidden_dim": ${HIDDEN_DIM},
     "mod_dim": ${MOD_DIM},
     "depth": ${DEPTH},
+    "inner_optim": "${META_INNER_OPTIM}",
     "finer_first_bias_scale": ${FINER_FIRST_BIAS_SCALE},
 }
 

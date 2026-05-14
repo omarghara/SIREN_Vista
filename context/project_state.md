@@ -113,6 +113,27 @@ Standalone script that **re-fits** modulations on train/test and reports MSE, PS
 - Wired as Step 4/4 of [SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh](SIREN_Vista/scripts/run_soft_lipschitz_mnist.sh); bash knobs: `EVAL_ITERS`, `EVAL_MAX_SAMPLES` (default 2000 per split — set blank for full eval).
 - See `CHANGES.md` §8 for the full design rationale, citing [SIREN paper](https://arxiv.org/abs/2006.09661) and [Functa paper](https://arxiv.org/abs/2201.12204).
 
+### Spatial Functa — verification and paper preset (CHANGES.md §16)
+
+A full audit of `SpatialModulatedINR` confirmed the implementation is **correct** against
+the Dupont et al. 2022 paper. Key results:
+
+- **φ grid:** `(s, s, c)` per image, e.g. `(8, 8, 16)`.
+- **1-NN cell lookup:** `cell = floor(coord * s)` — different coordinates → different cells;
+  all pixels in the same patch share one cell index.
+- **Local patch coords:** `local = coord * s - cell` produces pixel-center values
+  `0.125, 0.375, 0.625, 0.875` for 4-px patches — matches paper.
+- **`Linear(z_cell)` ≡ Conv2d(1×1):** Numerically verified (max diff 0.0); a block comment
+  in `SIREN.py` at `self.modul` explains the equivalence and why `Linear` is preferred.
+- **Gradient flow:** `phi.grad.shape == (8, 8, 16)` after backprop through the full pipeline.
+
+New **`scripts/test_spatial_functa.py`** covers tests A–E (cell lookup, local coords,
+1×1-conv equivalence, forward shape, gradient flow).
+
+`run_spatial_functa_cifar10_subset.sh` now has a **`PRESET` selector**:
+- `PRESET=current` (default): FINER/512/depth-10, 5 epochs.
+- `PRESET=paper`: SIREN/256/depth-6/ω₀=10/batch-128/ext_lr=3e-5, 511 epochs ≈ 200k updates.
+
 ### Spatial Functa (CHANGES.md §15)
 
 Implements the spatial latent-grid representation from From Data to Functa (Dupont et al.

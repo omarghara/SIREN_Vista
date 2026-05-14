@@ -979,6 +979,22 @@ class SpatialModulatedINR(nn.Module):
                 lsa_include_linear=lsa_include_linear,
             )
 
+        # Latent-to-modulation map: Linear(c, hidden*L) applied independently
+        # to each gathered cell code z_cell of shape (N, c).
+        #
+        # This is *mathematically identical* to the 1×1 convolution λ(z)
+        # described in Dupont et al. 2022 (From Data to Functa, Sec. 4):
+        #
+        #   m[i,j] = W · φ[i,j] + b       (shared W, b across all grid cells)
+        #
+        # Proof of equivalence (verified numerically in scripts/test_spatial_functa.py,
+        # Test E):
+        #   - Linear path:  phi.reshape(-1, c) → lin(each_row) → reshape to (s,s,C)
+        #   - Conv path:    phi.permute(2,0,1)[None] → Conv2d(c,C,k=1) → (1,C,s,s)
+        # Both produce identical outputs.  We use nn.Linear because it maps directly
+        # onto the per-pixel z_cell indexing without needing to reassemble a spatial
+        # grid for the convolution — and is therefore also correct for non-square or
+        # future bilinear-interpolation modes.
         self.modul = nn.Linear(self.latent_dim, hidden_features * num_layers)
 
         self.is_spatial = True

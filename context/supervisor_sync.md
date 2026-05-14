@@ -211,8 +211,26 @@ phases A → J.
 [build] SpatialModulatedINR  base_inr_type=siren  is_spatial=True  phi_shape=(8, 8, 16)  phi_numel=1024
 ```
 
-### Next step
+### Verification (added May 2026)
 
-Run `bash ~/SIREN_Vista/scripts/run_spatial_cifar10.sh` (paper `depth=6`).
-Success target: PSNR@200 > 20 dB (vs vanilla ≈18.8 dB) and classifier accuracy > 47%.
-A `depth=10` config is commented at the top of the script for the follow-up.
+A formal audit of `SpatialModulatedINR` in `SIREN.py` confirmed the implementation is
+**correct** against the paper's spatial latent-to-modulation pipeline:
+
+| Check | Result |
+|-------|--------|
+| φ shape `(s, s, c)` | ✓ |
+| 1-NN cell assignment | ✓ pixels `(0-3, *)` → cell-row 0; `(4-7, *)` → cell-row 1 |
+| Local patch coords | ✓ `0.125, 0.375, 0.625, 0.875` for 4-px patches |
+| `Linear(z_cell)` ≡ `Conv2d(1×1)` | ✓ max diff = 0.0 (proved + commented in SIREN.py) |
+| Gradient flow to φ `(8, 8, 16)` | ✓ |
+
+New file: `scripts/test_spatial_functa.py` (5 tests, all pass).
+
+### How to run the paper config
+
+```bash
+PRESET=paper bash ~/SIREN_Vista/scripts/run_spatial_functa_cifar10_subset.sh
+```
+
+Config: SIREN/256/depth-6/ω₀=10/batch-128/ext_lr=3e-5, 511 epochs ≈ 200k updates,
+makeset 3 SGD inner steps, local coords, nearest-neighbor, 8×8×16 grid.

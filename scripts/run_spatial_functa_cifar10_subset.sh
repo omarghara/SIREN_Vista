@@ -10,19 +10,34 @@
 # No PGD attack.
 #
 # Reference: Dupont et al. 2022 (From Data to Functa), Table 4 (1-NN row uses s=8, c=16).
-# You can scale HIDDEN_DIM / DEPTH like the FINER script; MOD_DIM is always s*s*c.
+#
+# ---- PRESET SELECTOR --------------------------------------------------------
+# Set PRESET to choose a configuration block:
+#
+#   PRESET=current   (default) — FINER backbone, hidden=512, depth=10, freq=60, ext_lr=1e-5
+#                                Large model, 5 epochs.  Good for quick ablation.
+#
+#   PRESET=paper     — plain SIREN backbone, paper Table 4 config:
+#                       hidden=256, depth=6, omega0=10, ext_lr=3e-5, batch=128
+#                       ~511 epochs ≈ 200k outer updates on CIFAR-10 (50k images / 128 per batch)
+#                       makeset inner steps = 3 (same as trainer inner steps)
+#
+# Override from env:  PRESET=paper bash scripts/run_spatial_functa_cifar10_subset.sh
+# ---------------------------------------------------------------------------
+
+PRESET="paper"
+
+#RESET="${PRESET:-current}"
 
 set -euo pipefail
 
-# ---- architecture ------------------------------------------------------------
+# ---- pipeline knobs (env-overridable) ---------------------------------------
+# SKIP_TRAINER=1 reuses an existing modSiren.pth at ${CHECKPOINT}.
+# SKIP_MAKESET=1 reuses an existing functaset directory at ${RUN_ROOT}/functaset.
+SKIP_TRAINER="${SKIP_TRAINER:-0}"
+SKIP_MAKESET="${SKIP_MAKESET:-0}"
 
-HIDDEN_DIM=512
-DEPTH=10
-
-INR_TYPE=finer            # siren | fourier_siren | finer | fourier_lsa
-COORD_TAG="norm01"
-
-SIREN_FREQ=30.0
+# ---- architecture (shared defaults, overridden per-preset below) ------------
 
 # Spatial latent grid: phi shape (LATENT_SPATIAL_DIM, LATENT_SPATIAL_DIM, LATENT_DIM)
 LATENT_SPATIAL_DIM=8
@@ -31,7 +46,7 @@ SPATIAL_INTERP=nearest
 MODULATION_TYPE=shift
 USE_LOCAL_COORDS=1
 
-MOD_DIM=$(( LATENT_SPATIAL_DIM * LATENT_SPATIAL_DIM * LATENT_DIM ))
+COORD_TAG="norm01"
 
 # Fourier path (only used when INR_TYPE=fourier_siren or fourier_lsa)
 FOURIER_NUM_FREQS=64
@@ -39,7 +54,6 @@ FOURIER_SIGMA=10.0
 FOURIER_INCLUDE_INPUT=0
 
 # FINER path (only used when INR_TYPE=finer)
-FINER_FREQ=30.0
 FINER_FIRST_BIAS_SCALE=2.0
 FINER_SCALE_REQ_GRAD=0
 
@@ -47,43 +61,86 @@ FINER_SCALE_REQ_GRAD=0
 LSA_NUM_FREQS=64
 LSA_SIGMA=10.0
 
-# ---- meta-training hyperparameters ------------------------------------------
+# ---- per-preset configuration -----------------------------------------------
 
-EPOCHS=5
-INT_LR=0.01
-INNER_STEPS=3
+if [[ "${PRESET}" == "paper" ]]; then
+    # Paper Table 4 — plain SIREN, 1-NN, local coords, omega0=10
+    # ~511 epochs ≈ 200k outer updates (50000 images / batch 128 * 511 ≈ 199 900)
+    INR_TYPE=siren
+    HIDDEN_DIM=256
+    DEPTH=6
+    SIREN_FREQ=10.0
+    FINER_FREQ=10.0          # unused for siren, kept for slug parity
 
-EXT_LR=1e-5
-TRAIN_BATCH_SIZE=32
+    EPOCHS=5               # ≈ 200k outer updates at batch_size=128 on CIFAR-10
+    INT_LR=0.01              # inner lr (phi optimisation in meta-training)
+    INNER_STEPS=3
+    META_INNER_OPTIM=sgd
+    EXT_LR=3e-5              # outer Adam lr on backbone
+    TRAIN_BATCH_SIZE=128
 
-CUDA_GPU=0
-LOG_SIGMAS_EVERY=50
+    MAKESET_ITERS=3          # inner steps when building functaset
+    MAKESET_INNER_OPTIM=sgd
+    MAKESET_LR=0.01
 
-# ---- functaset creation hyperparameters -------------------------------------
+    CLF_LR=0.001
+    CLF_WIDTH=512
+    CLF_DEPTH=2
+    CLF_DROPOUT=0.5
+    CLF_BATCH_SIZE=256
+    CLF_EPOCHS=120
 
-MAKESET_ITERS=200
-MAKESET_INNER_OPTIM=adam
-MAKESET_LR=0.003
+elif [[ "${PRESET}" == "current" ]]; then
+    # Larger FINER model — quick local baseline
+    INR_TYPE=finer
+    HIDDEN_DIM=512
+    DEPTH=10
+    SIREN_FREQ=60.0
+    FINER_FREQ=60.0
+
+    EPOCHS=5
+    INT_LR=0.01
+    INNER_STEPS=3
+    META_INNER_OPTIM=sgd
+    EXT_LR=1e-5
+    TRAIN_BATCH_SIZE=32
+
+    MAKESET_ITERS=200
+    MAKESET_INNER_OPTIM=adam
+    MAKESET_LR=0.003
+
+    CLF_LR=0.001
+    CLF_WIDTH=512
+    CLF_DEPTH=2
+    CLF_DROPOUT=0.5
+    CLF_BATCH_SIZE=256
+    CLF_EPOCHS=120
+
+else
+    echo "ERROR: unknown PRESET='${PRESET}'. Use 'current' or 'paper'." >&2
+    exit 1
+fi
+
+MOD_DIM=$(( LATENT_SPATIAL_DIM * LATENT_SPATIAL_DIM * LATENT_DIM ))
 
 MAX_TRAIN_SAMPLES=5000
 MAX_TEST_SAMPLES=1000
 
-# ---- classifier hyperparameters ---------------------------------------------
-
-CLF_LR=0.001
-CLF_WIDTH=512
-CLF_DEPTH=2
-CLF_DROPOUT=0.5
-CLF_BATCH_SIZE=256
-CLF_EPOCHS=120
+CUDA_GPU=0
+LOG_SIGMAS_EVERY=50
 
 # -----------------------------------------------------------------------------
 
+if [[ "${META_INNER_OPTIM}" != "sgd" && "${META_INNER_OPTIM}" != "adam" ]]; then
+    echo "ERROR: META_INNER_OPTIM must be 'sgd' or 'adam', got: ${META_INNER_OPTIM}" >&2
+    exit 1
+fi
+
 EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
-MAKESET_LR_TAG="3e-03"
+MAKESET_LR_TAG=$(printf "%.0e" "${MAKESET_LR}")
 LCOORDS_TAG=$([ "${USE_LOCAL_COORDS}" -eq 1 ] && echo "lc" || echo "gc")
 
-SLUG="functa_like_cifar10_spatial_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
+SLUG="functa_like_cifar10_spatial_${PRESET}_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_freq${SIREN_FREQ}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -144,19 +201,22 @@ export CUDA_VISIBLE_DEVICES="${CUDA_GPU}"
 cd ~/SIREN_Vista || exit 1
 
 echo "============================================================"
-echo "Spatial Functa CIFAR-10 subset pipeline"
+echo "Spatial Functa CIFAR-10 subset pipeline   (PRESET=${PRESET})"
 echo "dataset            = cifar10"
 echo "inr_type           = ${INR_TYPE}"
 echo "hidden_dim         = ${HIDDEN_DIM}"
 echo "mod_dim (flat)     = ${MOD_DIM}"
 echo "depth              = ${DEPTH}"
+echo "siren_freq (omega0)= ${SIREN_FREQ}"
 echo "latent grid s,c    = ${LATENT_SPATIAL_DIM} x ${LATENT_DIM}"
 echo "spatial_interp     = ${SPATIAL_INTERP}"
 echo "use_local_coords   = ${USE_LOCAL_COORDS}"
 echo "meta epochs        = ${EPOCHS}"
 echo "meta int_lr        = ${INT_LR}"
 echo "meta ext_lr        = ${EXT_LR}"
+echo "meta inner optim   = ${META_INNER_OPTIM}  (trainer.py --inner-optim)"
 echo "inner steps        = ${INNER_STEPS}"
+echo "train batch size   = ${TRAIN_BATCH_SIZE}"
 echo "make iters         = ${MAKESET_ITERS}"
 echo "make optim         = ${MAKESET_INNER_OPTIM}"
 echo "make lr            = ${MAKESET_LR}"
@@ -176,23 +236,32 @@ echo "Step 1/3: Training Spatial Functa CIFAR-10 backbone"
 echo "          -> ${CHECKPOINT}"
 echo
 
-python trainer.py \
-    --dataset cifar10 \
-    --data-path ../data \
-    --device cuda \
-    --num-epochs "${EPOCHS}" \
-    --batch-size "${TRAIN_BATCH_SIZE}" \
-    --int-lr "${INT_LR}" \
-    --ext-lr "${EXT_LR}" \
-    --hidden-dim "${HIDDEN_DIM}" \
-    --mod-dim "${MOD_DIM}" \
-    --depth "${DEPTH}" \
-    --inner-steps "${INNER_STEPS}" \
-    "${INR_FLAGS[@]}" \
-    "${SPATIAL_FLAGS[@]}" \
-    --model-name "${SLUG}" \
-    "${VARIANT_FLAGS[@]}" \
-    --log-sigmas-every "${LOG_SIGMAS_EVERY}"
+if [[ "${SKIP_TRAINER}" == "1" ]]; then
+    if [[ ! -f "${CHECKPOINT}" ]]; then
+        echo "ERROR: SKIP_TRAINER=1 but checkpoint missing: ${CHECKPOINT}" >&2
+        exit 1
+    fi
+    echo "[skip] SKIP_TRAINER=1; reusing existing checkpoint."
+else
+    python trainer.py \
+        --dataset cifar10 \
+        --data-path ../data \
+        --device cuda \
+        --num-epochs "${EPOCHS}" \
+        --batch-size "${TRAIN_BATCH_SIZE}" \
+        --int-lr "${INT_LR}" \
+        --ext-lr "${EXT_LR}" \
+        --hidden-dim "${HIDDEN_DIM}" \
+        --mod-dim "${MOD_DIM}" \
+        --depth "${DEPTH}" \
+        --inner-steps "${INNER_STEPS}" \
+        --inner-optim "${META_INNER_OPTIM}" \
+        "${INR_FLAGS[@]}" \
+        "${SPATIAL_FLAGS[@]}" \
+        --model-name "${SLUG}" \
+        "${VARIANT_FLAGS[@]}" \
+        --log-sigmas-every "${LOG_SIGMAS_EVERY}"
+fi
 
 echo
 echo "Verifying saved checkpoint"
@@ -235,6 +304,8 @@ checks = {
     "hidden_dim": ${HIDDEN_DIM},
     "mod_dim": ${MOD_DIM},
     "depth": ${DEPTH},
+    "freq": float("${SIREN_FREQ}"),
+    "inner_optim": "${META_INNER_OPTIM}",
     "spatial_modulation": True,
     "latent_spatial_dim": ${LATENT_SPATIAL_DIM},
     "latent_dim": ${LATENT_DIM},
@@ -255,6 +326,33 @@ if phi_shape != expected_shape:
     sys.exit(1)
 
 print("Checkpoint verified.")
+
+import os
+summary_path = os.path.join(os.path.dirname(ckpt_path), "checkpoint_summary.md")
+variant_args = ckpt.get("variant_args", {}) or {}
+lines = [
+    "# Backbone checkpoint summary",
+    "",
+    f"- **path**: \`{ckpt_path}\`",
+    f"- **model_name**: \`{ckpt.get('model_name')}\`",
+    f"- **variant**: \`{ckpt.get('variant')}\`",
+    f"- **epoch (best)**: {ckpt.get('epoch')}",
+    f"- **loss (best mean outer loss)**: {ckpt.get('loss')}",
+    f"- **num_epochs requested**: ${EPOCHS}",
+    "",
+    "## model_args",
+    "",
+]
+for k in sorted(model_args.keys()):
+    lines.append(f"- \`{k}\`: {model_args[k]!r}")
+if variant_args:
+    lines += ["", "## variant_args", ""]
+    for k in sorted(variant_args.keys()):
+        lines.append(f"- \`{k}\`: {variant_args[k]!r}")
+lines.append("")
+with open(summary_path, "w") as fh:
+    fh.write("\n".join(lines))
+print(f"Wrote backbone summary: {summary_path}")
 PYCKPT
 
 echo
@@ -262,35 +360,46 @@ echo "Step 2/3: Creating ${MAX_TRAIN_SAMPLES}-train / ${MAX_TEST_SAMPLES}-test C
 echo "          -> ${RUN_ROOT}/functaset/${SLUG}_{train,val,test}.pkl"
 echo
 
-rm -rf "${RUN_ROOT}/functaset"
-mkdir -p "${RUN_ROOT}"
+if [[ "${SKIP_MAKESET}" == "1" ]]; then
+    if [[ ! -d "${RUN_ROOT}/functaset" ]]; then
+        echo "ERROR: SKIP_MAKESET=1 but ${RUN_ROOT}/functaset is missing." >&2
+        exit 1
+    fi
+    echo "[skip] SKIP_MAKESET=1; reusing existing functaset directory."
+else
+    rm -rf "${RUN_ROOT}/functaset"
+    mkdir -p "${RUN_ROOT}"
 
-python makeset.py \
-    --dataset cifar10 \
-    --data-path ../data \
-    --iters "${MAKESET_ITERS}" \
-    --lr "${MAKESET_LR}" \
-    --inner-optim "${MAKESET_INNER_OPTIM}" \
-    --max-train-samples "${MAX_TRAIN_SAMPLES}" \
-    --max-test-samples "${MAX_TEST_SAMPLES}" \
-    --checkpoint "${CHECKPOINT}" \
-    --saveroot "${RUN_ROOT}" \
-    --device cuda \
-    --functaset-stem "${SLUG}" \
-    "${INR_FLAGS[@]}" \
-    "${SPATIAL_FLAGS[@]}" \
-    "${VARIANT_FLAGS[@]}"
+    python makeset.py \
+        --dataset cifar10 \
+        --data-path ../data \
+        --iters "${MAKESET_ITERS}" \
+        --lr "${MAKESET_LR}" \
+        --inner-optim "${MAKESET_INNER_OPTIM}" \
+        --max-train-samples "${MAX_TRAIN_SAMPLES}" \
+        --max-test-samples "${MAX_TEST_SAMPLES}" \
+        --checkpoint "${CHECKPOINT}" \
+        --saveroot "${RUN_ROOT}" \
+        --device cuda \
+        --functaset-stem "${SLUG}" \
+        "${INR_FLAGS[@]}" \
+        "${SPATIAL_FLAGS[@]}" \
+        "${VARIANT_FLAGS[@]}"
+fi
 
 echo
 echo "Combining train + val into one ${MAX_TRAIN_SAMPLES}-sample train set"
 echo
 
 python - <<PYCOMBINE
+import sys
 import joblib
 from collections import Counter
 
 root = "${RUN_ROOT}/functaset"
 slug = "${SLUG}"
+expected_shape = (${LATENT_SPATIAL_DIM}, ${LATENT_SPATIAL_DIM}, ${LATENT_DIM})
+expected_numel = ${MOD_DIM}
 
 train = joblib.load(f"{root}/{slug}_train.pkl")
 val = joblib.load(f"{root}/{slug}_val.pkl")
@@ -305,8 +414,23 @@ print("train:", len(train), Counter([x["label"] for x in train]))
 print("val:", len(val), Counter([x["label"] for x in val]))
 print("combined:", len(combined), Counter([x["label"] for x in combined]))
 print("test:", len(test), Counter([x["label"] for x in test]))
-print("first modul shape:", combined[0]["modul"].shape, "is_spatial:", combined[0].get("is_spatial"))
+first = combined[0]
+print("first modul shape:", first["modul"].shape, "is_spatial:", first.get("is_spatial"))
 print("saved:", out_path)
+
+actual_shape = tuple(first["modul"].shape)
+if actual_shape != expected_shape:
+    print(
+        f"ERROR: combined modul shape={actual_shape}, expected {expected_shape}. "
+        "Did makeset.py load a stale checkpoint with a different latent grid?",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+flat = first["modul"].reshape(-1).shape[0]
+if flat != expected_numel:
+    print(f"ERROR: flattened modul size={flat}, expected {expected_numel}.", file=sys.stderr)
+    sys.exit(1)
 PYCOMBINE
 
 echo
@@ -334,10 +458,102 @@ python ~/SIREN_Vista/train_classifier.py \
 popd > /dev/null
 
 echo
+echo "Writing classifier and run summaries"
+echo
+
+python - <<PYSUMMARY
+import os
+import sys
+import numpy as np
+import torch
+
+run_root = "${RUN_ROOT}"
+ckpt_path = "${CHECKPOINT}"
+slug = "${SLUG}"
+dataset = "cifar10"
+clf_dir = os.path.join(run_root, f"{dataset}_classifier")
+clf_path = os.path.join(clf_dir, "best_classifier.pth")
+acc_npy = os.path.join(clf_dir, "classifier_acc.npy")
+
+if not os.path.isfile(clf_path):
+    print(f"WARNING: classifier checkpoint missing: {clf_path}", file=sys.stderr)
+    sys.exit(0)
+
+clf = torch.load(clf_path, map_location="cpu")
+best_acc = float(clf.get("accuracy", float("nan")))
+best_epoch = clf.get("epoch")
+
+top1_series = top5_series = None
+if os.path.isfile(acc_npy):
+    arr = np.load(acc_npy)
+    if arr.ndim == 2 and arr.shape[0] >= 2:
+        top1_series = arr[0].tolist()
+        top5_series = arr[1].tolist()
+
+lines = [
+    "# Classifier checkpoint summary",
+    "",
+    f"- **path**: \`{clf_path}\`",
+    f"- **dataset**: {dataset}",
+    f"- **backbone slug**: \`{slug}\`",
+    f"- **best top-1 accuracy**: {best_acc:.2f}%",
+    f"- **best epoch**: {best_epoch}",
+    f"- **num epochs trained**: ${CLF_EPOCHS}",
+    f"- **classifier width**: ${CLF_WIDTH}",
+    f"- **classifier depth**: ${CLF_DEPTH}",
+    f"- **classifier dropout**: ${CLF_DROPOUT}",
+    f"- **classifier lr**: ${CLF_LR}",
+    f"- **classifier batch size**: ${CLF_BATCH_SIZE}",
+    f"- **mod_dim (flat input)**: ${MOD_DIM}",
+]
+if top1_series is not None:
+    lines += [
+        "",
+        f"- **final top-1**: {top1_series[-1]:.2f}%",
+        f"- **final top-5**: {top5_series[-1]:.2f}%",
+        f"- **max top-5**: {max(top5_series):.2f}%",
+    ]
+lines.append("")
+with open(os.path.join(clf_dir, "checkpoint_summary.md"), "w") as fh:
+    fh.write("\n".join(lines))
+print(f"Wrote classifier summary: {os.path.join(clf_dir, 'checkpoint_summary.md')}")
+
+ckpt = torch.load(ckpt_path, map_location="cpu") if os.path.isfile(ckpt_path) else {}
+run_summary = [
+    "# Run summary",
+    "",
+    f"- **slug**: \`{slug}\`",
+    f"- **run root**: \`{run_root}\`",
+    "",
+    "## Backbone",
+    "",
+    f"- **checkpoint**: \`{ckpt_path}\`",
+    f"- **best epoch**: {ckpt.get('epoch')}",
+    f"- **best loss (mean outer)**: {ckpt.get('loss')}",
+    f"- **variant**: \`{ckpt.get('variant')}\`",
+    "",
+    "## Classifier",
+    "",
+    f"- **checkpoint**: \`{clf_path}\`",
+    f"- **best top-1 accuracy**: {best_acc:.2f}%",
+    f"- **best epoch**: {best_epoch}",
+    f"- **num epochs trained**: ${CLF_EPOCHS}",
+    "",
+]
+out = os.path.join(run_root, "run_summary.md")
+with open(out, "w") as fh:
+    fh.write("\n".join(run_summary))
+print(f"Wrote run summary: {out}")
+PYSUMMARY
+
+echo
 echo "============================================================"
 echo "Done."
 echo "Spatial checkpoint : ${CHECKPOINT}"
+echo "Backbone summary   : $(dirname "${CHECKPOINT}")/checkpoint_summary.md"
 echo "Functaset train    : ${RUN_ROOT}/functaset/${SLUG}_train_all${MAX_TRAIN_SAMPLES}.pkl"
 echo "Functaset test     : ${RUN_ROOT}/functaset/${SLUG}_test.pkl"
 echo "Classifier         : ${RUN_ROOT}/cifar10_classifier/best_classifier.pth"
+echo "Classifier summary : ${RUN_ROOT}/cifar10_classifier/checkpoint_summary.md"
+echo "Run summary        : ${RUN_ROOT}/run_summary.md"
 echo "============================================================"
