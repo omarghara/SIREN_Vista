@@ -20,7 +20,7 @@ DEPTH=10
 INR_TYPE=finer
 COORD_TAG="norm01"
 
-FINER_FREQ=30.0
+FREQ=30.0
 FINER_FIRST_BIAS_SCALE=2.0
 FINER_SCALE_REQ_GRAD=0
 
@@ -74,7 +74,7 @@ else
     SCALE_TAG="scaledetach"
 fi
 
-SLUG="functa_like_cifar10_finer_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_freq${FINER_FREQ}_bias${BIAS_TAG}_${SCALE_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
+SLUG="functa_like_cifar10_finer_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_freq${FREQ}_bias${BIAS_TAG}_${SCALE_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -82,7 +82,7 @@ VARIANT_FLAGS=(
 
 INR_FLAGS=(
     --inr-type "${INR_TYPE}"
-    --finer-freq "${FINER_FREQ}"
+    --freq "${FREQ}"
     --finer-first-bias-scale "${FINER_FIRST_BIAS_SCALE}"
 )
 
@@ -108,7 +108,7 @@ echo "inr_type      = ${INR_TYPE}"
 echo "hidden_dim    = ${HIDDEN_DIM}"
 echo "mod_dim       = ${MOD_DIM}"
 echo "depth         = ${DEPTH}"
-echo "finer freq    = ${FINER_FREQ}"
+echo "freq (w0)     = ${FREQ}"
 echo "finer bias    = ${FINER_FIRST_BIAS_SCALE}"
 echo "scale grad    = ${FINER_SCALE_REQ_GRAD}"
 echo "meta epochs   = ${EPOCHS}"

@@ -425,10 +425,9 @@ def get_args():
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
-    parser.add_argument('--siren-freq', type=float, default=30.0,
-                        help='SIREN ω0; overridden by checkpoint model_args.freq if present.')
-    parser.add_argument('--finer-freq', type=float, default=30.0,
-                        help='FINER ω0. Overridden by checkpoint model_args.finer_freq if present.')
+    parser.add_argument('--freq', type=float, default=30.0,
+                        help='ω0 used by SIREN, FINER, and Fourier-SIREN hidden layers. '
+                             'Overridden by checkpoint model_args.freq if present.')
     parser.add_argument('--finer-first-bias-scale', type=float, default=1.0,
                         help='FINER first-layer bias init range U(-scale, scale). '
                              'Overridden by checkpoint model_args.finer_first_bias_scale.')
@@ -499,8 +498,7 @@ def _build_model(args, ckpt_model_args, device):
         'fourier_num_freqs': args.fourier_num_freqs,
         'fourier_sigma': args.fourier_sigma,
         'fourier_include_input': args.fourier_include_input,
-        'freq': args.siren_freq,
-        'finer_freq': args.finer_freq,
+        'freq': args.freq,
         'finer_first_bias_scale': args.finer_first_bias_scale,
         'finer_scale_req_grad': args.finer_scale_req_grad,
         'lsa_num_harmonics': args.lsa_num_harmonics,
@@ -517,7 +515,7 @@ def _build_model(args, ckpt_model_args, device):
         override_keys = (
             'hidden_dim', 'mod_dim', 'depth', 'height', 'width', 'out_features',
             'inr_type', 'fourier_num_freqs', 'fourier_sigma', 'fourier_include_input', 'freq',
-            'finer_freq', 'finer_first_bias_scale', 'finer_scale_req_grad',
+            'finer_first_bias_scale', 'finer_scale_req_grad',
             'lsa_num_harmonics', 'lsa_init_scale', 'lsa_include_linear',
             'spatial_modulation', 'latent_spatial_dim', 'latent_dim',
             'spatial_interp', 'use_local_coords', 'modulation_type',
@@ -608,7 +606,7 @@ def _build_model(args, ckpt_model_args, device):
             modul_features=model_args['mod_dim'],
             device=device,
             out_features=model_args['out_features'],
-            freq=model_args.get('finer_freq', model_args.get('freq', 30.0)),
+            freq=model_args.get('freq', 30.0),
             first_bias_scale=model_args.get('finer_first_bias_scale', 1.0),
             scale_req_grad=model_args.get('finer_scale_req_grad', False),
         )

@@ -38,7 +38,7 @@ def _build_2d_model(args, height, width, out_features):
             spatial_interp=args.spatial_interp,
             use_local_coords=args.use_local_coords,
             modulation_type=args.modulation_type,
-            freq=args.siren_freq,
+            freq=args.freq,
             device=args.device,
             out_features=out_features,
             fourier_num_freqs=args.fourier_num_freqs,
@@ -64,7 +64,7 @@ def _build_2d_model(args, height, width, out_features):
             modul_features=args.mod_dim,
             device=args.device,
             out_features=out_features,
-            freq=args.siren_freq,
+            freq=args.freq,
             fourier_num_freqs=args.fourier_num_freqs,
             fourier_sigma=args.fourier_sigma,
             fourier_include_input=args.fourier_include_input,
@@ -94,7 +94,7 @@ def _build_2d_model(args, height, width, out_features):
             modul_features=args.mod_dim,
             device=args.device,
             out_features=out_features,
-            freq=args.finer_freq,
+            freq=args.freq,
             first_bias_scale=args.finer_first_bias_scale,
             scale_req_grad=args.finer_scale_req_grad,
         )
@@ -107,7 +107,7 @@ def _build_2d_model(args, height, width, out_features):
             modul_features=args.mod_dim,
             device=args.device,
             out_features=out_features,
-            freq=args.siren_freq,
+            freq=args.freq,
         )
     else:
         raise ValueError(f"Unknown --inr-type {args.inr_type!r}")
@@ -257,11 +257,10 @@ def get_args():
                         help='Stddev of Gaussian Fourier frequency matrix B.')
     parser.add_argument('--fourier-include-input', action='store_true', default=False,
                         help='Concatenate raw (x,y) coordinates to Fourier features.')
-    parser.add_argument('--siren-freq', type=float, default=30.0,
-                        help='SIREN ω0 (angular frequency) in sin(ω0(·)); default 30.')
+    parser.add_argument('--freq', type=float, default=30.0,
+                        help='ω0 (angular frequency) used by SIREN, FINER, and Fourier-SIREN '
+                             'hidden layers: sin(ω0(Wx + b + shift)). Default 30.')
     parser.add_argument('--dataset', choices=["mnist", "fmnist", "cifar10", "modelnet"], help="Train for MNIST, Fashion-MNIST, CIFAR-10, or ModelNet10")
-    parser.add_argument('--finer-freq', type=float, default=30.0,
-                    help='FINER ω0 / frequency. Start with 30.0.')
     parser.add_argument('--finer-first-bias-scale', type=float, default=1.0,
                         help='FINER first-layer bias init range: U(-scale, scale). '
                             'This controls the supported frequency set.')
@@ -404,8 +403,7 @@ if __name__ == '__main__':
                             'fourier_num_freqs': args.fourier_num_freqs,
                             'fourier_sigma': args.fourier_sigma,
                             'fourier_include_input': args.fourier_include_input,
-                            'freq': args.siren_freq,
-                            'finer_freq': args.finer_freq,
+                            'freq': args.freq,
                             'finer_first_bias_scale': args.finer_first_bias_scale,
                             'finer_scale_req_grad': args.finer_scale_req_grad,
                             'coord_normalization': 'zero_one_pixel_centers',

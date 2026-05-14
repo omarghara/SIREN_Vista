@@ -21,7 +21,7 @@ set -euo pipefail
 HIDDEN_DIM=256
 DEPTH=6
 INR_TYPE=siren            # 'siren' | 'fourier_siren' | 'finer' | 'fourier_lsa'
-SIREN_FREQ=30.0           # ω0 of every hidden sine layer
+FREQ=30.0                 # ω0 of every hidden sine layer (SIREN and FINER)
 
 # Spatial latent grid: phi has shape (LATENT_SPATIAL_DIM, LATENT_SPATIAL_DIM, LATENT_DIM)
 LATENT_SPATIAL_DIM=8      # s ; each cell covers CIFAR's 32/8 = 4 pixels per side
@@ -76,7 +76,7 @@ EVAL_MAX_SAMPLES=1000
 EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
 LCOORDS_TAG=$([ "${USE_LOCAL_COORDS}" -eq 1 ] && echo "lc" || echo "gc")
 
-SLUG="spatial_cifar10_${INR_TYPE}_h${HIDDEN_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_SPATIAL_DIM}x${LATENT_DIM}_${SPATIAL_INTERP}_${LCOORDS_TAG}_w0_${SIREN_FREQ}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_${INNER_OPTIM}"
+SLUG="spatial_cifar10_${INR_TYPE}_h${HIDDEN_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_SPATIAL_DIM}x${LATENT_DIM}_${SPATIAL_INTERP}_${LCOORDS_TAG}_w0_${FREQ}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_${INNER_OPTIM}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -94,8 +94,8 @@ if [[ "${USE_LOCAL_COORDS}" -eq 1 ]]; then
 fi
 
 INR_FLAGS=(
-    --inr-type   "${INR_TYPE}"
-    --siren-freq "${SIREN_FREQ}"
+    --inr-type "${INR_TYPE}"
+    --freq     "${FREQ}"
 )
 
 MODEL_DIR="model_cifar10/${SLUG}"
@@ -115,7 +115,7 @@ echo "dataset            = cifar10"
 echo "inr_type           = ${INR_TYPE}"
 echo "hidden_dim         = ${HIDDEN_DIM}"
 echo "depth              = ${DEPTH}"
-echo "siren_freq (w0)    = ${SIREN_FREQ}"
+echo "freq (w0)          = ${FREQ}"
 echo "latent grid (s,c)  = ${LATENT_SPATIAL_DIM} x ${LATENT_SPATIAL_DIM} x ${LATENT_DIM}"
 echo "phi_numel (mod_dim)= ${MOD_DIM}"
 echo "interp             = ${SPATIAL_INTERP}"

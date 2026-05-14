@@ -69,8 +69,7 @@ if [[ "${PRESET}" == "paper" ]]; then
     INR_TYPE=siren
     HIDDEN_DIM=256
     DEPTH=6
-    SIREN_FREQ=10.0
-    FINER_FREQ=10.0          # unused for siren, kept for slug parity
+    FREQ=10.0
 
     EPOCHS=5               # ≈ 200k outer updates at batch_size=128 on CIFAR-10
     INT_LR=0.01              # inner lr (phi optimisation in meta-training)
@@ -95,8 +94,7 @@ elif [[ "${PRESET}" == "current" ]]; then
     INR_TYPE=finer
     HIDDEN_DIM=512
     DEPTH=10
-    SIREN_FREQ=60.0
-    FINER_FREQ=60.0
+    FREQ=60.0
 
     EPOCHS=5
     INT_LR=0.01
@@ -140,7 +138,7 @@ EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
 MAKESET_LR_TAG=$(printf "%.0e" "${MAKESET_LR}")
 LCOORDS_TAG=$([ "${USE_LOCAL_COORDS}" -eq 1 ] && echo "lc" || echo "gc")
 
-SLUG="functa_like_cifar10_spatial_${PRESET}_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_freq${SIREN_FREQ}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
+SLUG="functa_like_cifar10_spatial_${PRESET}_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_freq${FREQ}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
 
 VARIANT_FLAGS=(
     --variant vanilla
@@ -161,17 +159,17 @@ INR_FLAGS=( --inr-type "${INR_TYPE}" )
 
 case "${INR_TYPE}" in
     siren)
-        INR_FLAGS+=( --siren-freq "${SIREN_FREQ}" )
+        INR_FLAGS+=( --freq "${FREQ}" )
         ;;
     fourier_siren)
-        INR_FLAGS+=( --siren-freq "${SIREN_FREQ}" )
+        INR_FLAGS+=( --freq "${FREQ}" )
         INR_FLAGS+=( --fourier-num-freqs "${FOURIER_NUM_FREQS}" --fourier-sigma "${FOURIER_SIGMA}" )
         if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
             INR_FLAGS+=( --fourier-include-input )
         fi
         ;;
     finer)
-        INR_FLAGS+=( --finer-freq "${FINER_FREQ}" --finer-first-bias-scale "${FINER_FIRST_BIAS_SCALE}" )
+        INR_FLAGS+=( --freq "${FREQ}" --finer-first-bias-scale "${FINER_FIRST_BIAS_SCALE}" )
         if [[ "${FINER_SCALE_REQ_GRAD}" -eq 1 ]]; then
             INR_FLAGS+=( --finer-scale-req-grad )
         fi
@@ -207,7 +205,7 @@ echo "inr_type           = ${INR_TYPE}"
 echo "hidden_dim         = ${HIDDEN_DIM}"
 echo "mod_dim (flat)     = ${MOD_DIM}"
 echo "depth              = ${DEPTH}"
-echo "siren_freq (omega0)= ${SIREN_FREQ}"
+echo "freq (omega0)      = ${FREQ}"
 echo "latent grid s,c    = ${LATENT_SPATIAL_DIM} x ${LATENT_DIM}"
 echo "spatial_interp     = ${SPATIAL_INTERP}"
 echo "use_local_coords   = ${USE_LOCAL_COORDS}"
@@ -304,7 +302,7 @@ checks = {
     "hidden_dim": ${HIDDEN_DIM},
     "mod_dim": ${MOD_DIM},
     "depth": ${DEPTH},
-    "freq": float("${SIREN_FREQ}"),
+    "freq": float("${FREQ}"),
     "inner_optim": "${META_INNER_OPTIM}",
     "spatial_modulation": True,
     "latent_spatial_dim": ${LATENT_SPATIAL_DIM},
