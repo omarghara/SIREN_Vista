@@ -17,8 +17,9 @@
 #   PRESET=current   (default) — FINER backbone, hidden=512, depth=10, freq=60, ext_lr=1e-5
 #                                Large model, 5 epochs.  Good for quick ablation.
 #
-#   PRESET=paper     — plain SIREN backbone, paper Table 4 config:
-#                       hidden=256, depth=6, omega0=10, ext_lr=3e-5, batch=128
+#   PRESET=paper     — Spatial Functa with FINER backbone (same schedule as Table 4 row):
+#                       hidden=256, depth=6, freq=10, finer_first_bias_scale=2,
+#                       ext_lr=3e-5, batch=128
 #                       ~511 epochs ≈ 200k outer updates on CIFAR-10 (50k images / 128 per batch)
 #                       makeset inner steps = 3 (same as trainer inner steps)
 #
@@ -64,14 +65,16 @@ LSA_SIGMA=10.0
 # ---- per-preset configuration -----------------------------------------------
 
 if [[ "${PRESET}" == "paper" ]]; then
-    # Paper Table 4 — plain SIREN, 1-NN, local coords, omega0=10
+    # Paper-like schedule (Table 4 hyperparams) with FINER instead of SIREN;
+    # FINER_FIRST_BIAS_SCALE=2.0 from shared defaults above.
     # ~511 epochs ≈ 200k outer updates (50000 images / batch 128 * 511 ≈ 199 900)
     INR_TYPE=siren
     HIDDEN_DIM=256
     DEPTH=6
     FREQ=10.0
+   #FINER_FIRST_BIAS_SCALE=2.0
 
-    EPOCHS=5               # ≈ 200k outer updates at batch_size=128 on CIFAR-10
+    EPOCHS=512               # ≈ 200k outer updates at batch_size=128 on CIFAR-10
     INT_LR=0.01              # inner lr (phi optimisation in meta-training)
     INNER_STEPS=3
     META_INNER_OPTIM=sgd
@@ -121,8 +124,8 @@ fi
 
 MOD_DIM=$(( LATENT_SPATIAL_DIM * LATENT_SPATIAL_DIM * LATENT_DIM ))
 
-MAX_TRAIN_SAMPLES=5000
-MAX_TEST_SAMPLES=1000
+MAX_TRAIN_SAMPLES=50000
+MAX_TEST_SAMPLES=10000
 
 CUDA_GPU=0
 LOG_SIGMAS_EVERY=50
@@ -271,12 +274,24 @@ if [[ ! -f "${CHECKPOINT}" ]]; then
     exit 1
 fi
 
-python - <<PYCKPT
+CKPT_PATH="${CHECKPOINT}" \
+EXPECTED_MODEL_NAME="${SLUG}" \
+EXPECTED_INR_TYPE="${INR_TYPE}" \
+EXPECTED_HIDDEN_DIM="${HIDDEN_DIM}" \
+EXPECTED_MOD_DIM="${MOD_DIM}" \
+EXPECTED_DEPTH="${DEPTH}" \
+EXPECTED_FREQ="${FREQ}" \
+EXPECTED_INNER_OPTIM="${META_INNER_OPTIM}" \
+EXPECTED_LATENT_SPATIAL_DIM="${LATENT_SPATIAL_DIM}" \
+EXPECTED_LATENT_DIM="${LATENT_DIM}" \
+REQUESTED_EPOCHS="${EPOCHS}" \
+python - <<'PYCKPT'
+import os
 import sys
 import torch
 
-ckpt_path = "${CHECKPOINT}"
-expected_model_name = "${SLUG}"
+ckpt_path = os.environ["CKPT_PATH"]
+expected_model_name = os.environ["EXPECTED_MODEL_NAME"]
 ckpt = torch.load(ckpt_path, map_location="cpu")
 
 print("checkpoint metadata:")
@@ -296,19 +311,23 @@ if ckpt.get("model_name") != expected_model_name:
 
 model_args = ckpt.get("model_args", {})
 
+expected_lat_s = int(os.environ["EXPECTED_LATENT_SPATIAL_DIM"])
+expected_lat_c = int(os.environ["EXPECTED_LATENT_DIM"])
+expected_mod_dim = int(os.environ["EXPECTED_MOD_DIM"])
+
 checks = {
     "dataset": "cifar10",
-    "inr_type": "${INR_TYPE}",
-    "hidden_dim": ${HIDDEN_DIM},
-    "mod_dim": ${MOD_DIM},
-    "depth": ${DEPTH},
-    "freq": float("${FREQ}"),
-    "inner_optim": "${META_INNER_OPTIM}",
+    "inr_type": os.environ["EXPECTED_INR_TYPE"],
+    "hidden_dim": int(os.environ["EXPECTED_HIDDEN_DIM"]),
+    "mod_dim": expected_mod_dim,
+    "depth": int(os.environ["EXPECTED_DEPTH"]),
+    "freq": float(os.environ["EXPECTED_FREQ"]),
+    "inner_optim": os.environ["EXPECTED_INNER_OPTIM"],
     "spatial_modulation": True,
-    "latent_spatial_dim": ${LATENT_SPATIAL_DIM},
-    "latent_dim": ${LATENT_DIM},
+    "latent_spatial_dim": expected_lat_s,
+    "latent_dim": expected_lat_c,
     "is_spatial": True,
-    "phi_numel": ${MOD_DIM},
+    "phi_numel": expected_mod_dim,
 }
 
 for key, expected in checks.items():
@@ -318,35 +337,34 @@ for key, expected in checks.items():
         sys.exit(1)
 
 phi_shape = tuple(model_args.get("phi_shape", ()))
-expected_shape = (${LATENT_SPATIAL_DIM}, ${LATENT_SPATIAL_DIM}, ${LATENT_DIM})
+expected_shape = (expected_lat_s, expected_lat_s, expected_lat_c)
 if phi_shape != expected_shape:
     print(f"ERROR: phi_shape={phi_shape}, expected {expected_shape}", file=sys.stderr)
     sys.exit(1)
 
 print("Checkpoint verified.")
 
-import os
 summary_path = os.path.join(os.path.dirname(ckpt_path), "checkpoint_summary.md")
 variant_args = ckpt.get("variant_args", {}) or {}
 lines = [
     "# Backbone checkpoint summary",
     "",
-    f"- **path**: \`{ckpt_path}\`",
-    f"- **model_name**: \`{ckpt.get('model_name')}\`",
-    f"- **variant**: \`{ckpt.get('variant')}\`",
+    f"- **path**: `{ckpt_path}`",
+    f"- **model_name**: `{ckpt.get('model_name')}`",
+    f"- **variant**: `{ckpt.get('variant')}`",
     f"- **epoch (best)**: {ckpt.get('epoch')}",
     f"- **loss (best mean outer loss)**: {ckpt.get('loss')}",
-    f"- **num_epochs requested**: ${EPOCHS}",
+    f"- **num_epochs requested**: {os.environ['REQUESTED_EPOCHS']}",
     "",
     "## model_args",
     "",
 ]
 for k in sorted(model_args.keys()):
-    lines.append(f"- \`{k}\`: {model_args[k]!r}")
+    lines.append(f"- `{k}`: {model_args[k]!r}")
 if variant_args:
     lines += ["", "## variant_args", ""]
     for k in sorted(variant_args.keys()):
-        lines.append(f"- \`{k}\`: {variant_args[k]!r}")
+        lines.append(f"- `{k}`: {variant_args[k]!r}")
 lines.append("")
 with open(summary_path, "w") as fh:
     fh.write("\n".join(lines))
@@ -389,15 +407,25 @@ echo
 echo "Combining train + val into one ${MAX_TRAIN_SAMPLES}-sample train set"
 echo
 
-python - <<PYCOMBINE
+FUNCTASET_ROOT="${RUN_ROOT}/functaset" \
+SLUG="${SLUG}" \
+EXPECTED_LATENT_SPATIAL_DIM="${LATENT_SPATIAL_DIM}" \
+EXPECTED_LATENT_DIM="${LATENT_DIM}" \
+EXPECTED_MOD_DIM="${MOD_DIM}" \
+MAX_TRAIN_SAMPLES="${MAX_TRAIN_SAMPLES}" \
+python - <<'PYCOMBINE'
+import os
 import sys
 import joblib
 from collections import Counter
 
-root = "${RUN_ROOT}/functaset"
-slug = "${SLUG}"
-expected_shape = (${LATENT_SPATIAL_DIM}, ${LATENT_SPATIAL_DIM}, ${LATENT_DIM})
-expected_numel = ${MOD_DIM}
+root = os.environ["FUNCTASET_ROOT"]
+slug = os.environ["SLUG"]
+max_train = os.environ["MAX_TRAIN_SAMPLES"]
+expected_lat_s = int(os.environ["EXPECTED_LATENT_SPATIAL_DIM"])
+expected_lat_c = int(os.environ["EXPECTED_LATENT_DIM"])
+expected_shape = (expected_lat_s, expected_lat_s, expected_lat_c)
+expected_numel = int(os.environ["EXPECTED_MOD_DIM"])
 
 train = joblib.load(f"{root}/{slug}_train.pkl")
 val = joblib.load(f"{root}/{slug}_val.pkl")
@@ -405,7 +433,7 @@ test = joblib.load(f"{root}/{slug}_test.pkl")
 
 combined = train + val
 
-out_path = f"{root}/{slug}_train_all${MAX_TRAIN_SAMPLES}.pkl"
+out_path = f"{root}/{slug}_train_all{max_train}.pkl"
 joblib.dump(combined, out_path)
 
 print("train:", len(train), Counter([x["label"] for x in train]))
@@ -459,15 +487,25 @@ echo
 echo "Writing classifier and run summaries"
 echo
 
-python - <<PYSUMMARY
+RUN_ROOT="${RUN_ROOT}" \
+CKPT_PATH="${CHECKPOINT}" \
+SLUG="${SLUG}" \
+CLF_EPOCHS="${CLF_EPOCHS}" \
+CLF_WIDTH="${CLF_WIDTH}" \
+CLF_DEPTH="${CLF_DEPTH}" \
+CLF_DROPOUT="${CLF_DROPOUT}" \
+CLF_LR="${CLF_LR}" \
+CLF_BATCH_SIZE="${CLF_BATCH_SIZE}" \
+MOD_DIM="${MOD_DIM}" \
+python - <<'PYSUMMARY'
 import os
 import sys
 import numpy as np
 import torch
 
-run_root = "${RUN_ROOT}"
-ckpt_path = "${CHECKPOINT}"
-slug = "${SLUG}"
+run_root = os.environ["RUN_ROOT"]
+ckpt_path = os.environ["CKPT_PATH"]
+slug = os.environ["SLUG"]
 dataset = "cifar10"
 clf_dir = os.path.join(run_root, f"{dataset}_classifier")
 clf_path = os.path.join(clf_dir, "best_classifier.pth")
@@ -491,18 +529,18 @@ if os.path.isfile(acc_npy):
 lines = [
     "# Classifier checkpoint summary",
     "",
-    f"- **path**: \`{clf_path}\`",
+    f"- **path**: `{clf_path}`",
     f"- **dataset**: {dataset}",
-    f"- **backbone slug**: \`{slug}\`",
+    f"- **backbone slug**: `{slug}`",
     f"- **best top-1 accuracy**: {best_acc:.2f}%",
     f"- **best epoch**: {best_epoch}",
-    f"- **num epochs trained**: ${CLF_EPOCHS}",
-    f"- **classifier width**: ${CLF_WIDTH}",
-    f"- **classifier depth**: ${CLF_DEPTH}",
-    f"- **classifier dropout**: ${CLF_DROPOUT}",
-    f"- **classifier lr**: ${CLF_LR}",
-    f"- **classifier batch size**: ${CLF_BATCH_SIZE}",
-    f"- **mod_dim (flat input)**: ${MOD_DIM}",
+    f"- **num epochs trained**: {os.environ['CLF_EPOCHS']}",
+    f"- **classifier width**: {os.environ['CLF_WIDTH']}",
+    f"- **classifier depth**: {os.environ['CLF_DEPTH']}",
+    f"- **classifier dropout**: {os.environ['CLF_DROPOUT']}",
+    f"- **classifier lr**: {os.environ['CLF_LR']}",
+    f"- **classifier batch size**: {os.environ['CLF_BATCH_SIZE']}",
+    f"- **mod_dim (flat input)**: {os.environ['MOD_DIM']}",
 ]
 if top1_series is not None:
     lines += [
@@ -520,22 +558,22 @@ ckpt = torch.load(ckpt_path, map_location="cpu") if os.path.isfile(ckpt_path) el
 run_summary = [
     "# Run summary",
     "",
-    f"- **slug**: \`{slug}\`",
-    f"- **run root**: \`{run_root}\`",
+    f"- **slug**: `{slug}`",
+    f"- **run root**: `{run_root}`",
     "",
     "## Backbone",
     "",
-    f"- **checkpoint**: \`{ckpt_path}\`",
+    f"- **checkpoint**: `{ckpt_path}`",
     f"- **best epoch**: {ckpt.get('epoch')}",
     f"- **best loss (mean outer)**: {ckpt.get('loss')}",
-    f"- **variant**: \`{ckpt.get('variant')}\`",
+    f"- **variant**: `{ckpt.get('variant')}`",
     "",
     "## Classifier",
     "",
-    f"- **checkpoint**: \`{clf_path}\`",
+    f"- **checkpoint**: `{clf_path}`",
     f"- **best top-1 accuracy**: {best_acc:.2f}%",
     f"- **best epoch**: {best_epoch}",
-    f"- **num epochs trained**: ${CLF_EPOCHS}",
+    f"- **num epochs trained**: {os.environ['CLF_EPOCHS']}",
     "",
 ]
 out = os.path.join(run_root, "run_summary.md")
