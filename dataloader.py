@@ -68,8 +68,8 @@ class Functaset(Dataset):
 
     def __getitem__(self, item):
         pair = self.functaset[item]
-        modul = torch.tensor(pair['modul'])
-        label = torch.tensor(pair['label'])
+        modul = torch.as_tensor(pair['modul'], dtype=torch.float32)
+        label = torch.as_tensor(pair['label'], dtype=torch.long)
         return modul, label
 
     def __len__(self):

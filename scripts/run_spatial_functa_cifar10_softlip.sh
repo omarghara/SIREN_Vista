@@ -1,134 +1,83 @@
 #!/bin/bash
 
-# Spatial Functa CIFAR-10 subset pipeline (same layout as run_fourier_cifar10.sh / FINER script):
-#   1. meta-train SpatialModulatedINR (global coords + 1-NN latent grid + per-pixel shifts),
-#   2. create 5000-train / 1000-test spatial functaset (modul shape (s,s,c) per image),
-#   3. combine train+val into one training set,
-#   4. train downstream MLP on flattened modulations (B, s*s*c).
+# Spatial Functa CIFAR-10 (paper schedule) + soft-Lipschitz (90% vanilla sigma caps).
 #
-# No reconstruction eval.
-# No PGD attack.
+# Same backbone / functaset schedule as run_spatial_functa_cifar10_subset.sh (PRESET=paper):
+#   - SpatialModulatedINR, SIREN, h256, depth 6, freq 10, 50k/10k, e512
+#   - Meta-training inner optim: SGD, 3 steps; makeset: SGD, lr 0.01, 3 iters
 #
-# Reference: Dupont et al. 2022 (From Data to Functa), Table 4 (1-NN row uses s=8, c=16).
+# Variant: soft_lipschitz with hardcoded caps = 0.9 * vanilla_sigmas in
+#   variants/soft_lipschitz.py (spatial paper SIREN depth-6 reference).
 #
-# ---- PRESET SELECTOR --------------------------------------------------------
-# Set PRESET to choose a configuration block:
+# Downstream classifier: spatial CNN (not MLP), matching the FINER spatial-paper CNN setup.
 #
-#   PRESET=current   (default) — FINER backbone, hidden=512, depth=10, freq=60, ext_lr=1e-5
-#                                Large model, 5 epochs.  Good for quick ablation.
+# Pipeline:
+#   1. meta-train spatial backbone with soft-Lipschitz penalty
+#   2. makeset (SGD phi fit) + combine train+val
+#   3. train CNN classifier on flattened phi grid
 #
-#   PRESET=paper     — Spatial Functa with FINER backbone (same schedule as Table 4 row):
-#                       hidden=256, depth=6, freq=10, finer_first_bias_scale=2,
-#                       ext_lr=3e-5, batch=128
-#                       ~511 epochs ≈ 200k outer updates on CIFAR-10 (50k images / 128 per batch)
-#                       makeset inner steps = 3 (same as trainer inner steps)
-#
-# Override from env:  PRESET=paper bash scripts/run_spatial_functa_cifar10_subset.sh
-# ---------------------------------------------------------------------------
-
-PRESET="paper"
-
-#RESET="${PRESET:-current}"
+# Override from env examples:
+#   CUDA_GPU=1 bash scripts/run_spatial_functa_cifar10_softlip.sh
+#   SKIP_TRAINER=1 SKIP_MAKESET=0 bash scripts/run_spatial_functa_cifar10_softlip.sh
 
 set -euo pipefail
 
+PRESET="paper"
+
 # ---- pipeline knobs (env-overridable) ---------------------------------------
-# SKIP_TRAINER=1 reuses an existing modSiren.pth at ${CHECKPOINT}.
-# SKIP_MAKESET=1 reuses an existing functaset directory at ${RUN_ROOT}/functaset.
 SKIP_TRAINER="${SKIP_TRAINER:-0}"
 SKIP_MAKESET="${SKIP_MAKESET:-0}"
+SKIP_CLASSIFIER="${SKIP_CLASSIFIER:-0}"
 
-# ---- architecture (shared defaults, overridden per-preset below) ------------
+# Soft-Lipschitz (L is ignored by hardcoded _collect_layers; kept for CLI compatibility)
+SOFT_LIP_CAP="${SOFT_LIP_CAP:-1.0}"
+SOFT_LIP_LAMBDA="${SOFT_LIP_LAMBDA:-1e-2}"
+SOFT_LIP_APPLY_TO="${SOFT_LIP_APPLY_TO:-sine_and_readout}"
+SOFT_LIP_SKIP_FIRST="${SOFT_LIP_SKIP_FIRST:-0}"
+SOFT_LIP_CAP_TAG="${SOFT_LIP_CAP_TAG:-cap90}"
 
-# Spatial latent grid: phi shape (LATENT_SPATIAL_DIM, LATENT_SPATIAL_DIM, LATENT_DIM)
+# ---- architecture (spatial Functa, paper preset) ----------------------------
+
 LATENT_SPATIAL_DIM=8
 LATENT_DIM=16
 SPATIAL_INTERP=nearest
 MODULATION_TYPE=shift
 USE_LOCAL_COORDS=1
-
 COORD_TAG="norm01"
 
-# Fourier path (only used when INR_TYPE=fourier_siren or fourier_lsa)
-FOURIER_NUM_FREQS=64
-FOURIER_SIGMA=10.0
-FOURIER_INCLUDE_INPUT=0
+INR_TYPE=siren
+HIDDEN_DIM=256
+DEPTH=6
+FREQ=10.0
 
-# FINER path (only used when INR_TYPE=finer)
-FINER_FIRST_BIAS_SCALE=2.0
-FINER_SCALE_REQ_GRAD=0
+EPOCHS=12
+INT_LR=0.01
+INNER_STEPS=3
+META_INNER_OPTIM=sgd
+EXT_LR=3e-5
+TRAIN_BATCH_SIZE=128
 
-# LSA path (only used when INR_TYPE=fourier_lsa)
-LSA_NUM_FREQS=64
-LSA_SIGMA=10.0
-
-# ---- per-preset configuration -----------------------------------------------
-
-if [[ "${PRESET}" == "paper" ]]; then
-    # Paper-like schedule (Table 4 hyperparams) with FINER instead of SIREN;
-    # FINER_FIRST_BIAS_SCALE=2.0 from shared defaults above.
-    # ~511 epochs ≈ 200k outer updates (50000 images / batch 128 * 511 ≈ 199 900)
-    INR_TYPE=siren
-    HIDDEN_DIM=256
-    DEPTH=6
-    FREQ=10.0
-   #FINER_FIRST_BIAS_SCALE=2.0
-
-    EPOCHS=512               # ≈ 200k outer updates at batch_size=128 on CIFAR-10
-    INT_LR=0.01              # inner lr (phi optimisation in meta-training)
-    INNER_STEPS=3
-    META_INNER_OPTIM=sgd
-    EXT_LR=3e-5              # outer Adam lr on backbone
-    TRAIN_BATCH_SIZE=128
-
-    MAKESET_ITERS=3          # inner steps when building functaset
-    MAKESET_INNER_OPTIM=sgd
-    MAKESET_LR=0.01
-
-    CLF_LR=0.001
-    CLF_WIDTH=512
-    CLF_DEPTH=2
-    CLF_DROPOUT=0.5
-    CLF_BATCH_SIZE=256
-    CLF_EPOCHS=120
-
-elif [[ "${PRESET}" == "current" ]]; then
-    # Larger FINER model — quick local baseline
-    INR_TYPE=finer
-    HIDDEN_DIM=512
-    DEPTH=10
-    FREQ=60.0
-
-    EPOCHS=5
-    INT_LR=0.01
-    INNER_STEPS=3
-    META_INNER_OPTIM=sgd
-    EXT_LR=1e-5
-    TRAIN_BATCH_SIZE=32
-
-    MAKESET_ITERS=200
-    MAKESET_INNER_OPTIM=adam
-    MAKESET_LR=0.003
-
-    CLF_LR=0.001
-    CLF_WIDTH=512
-    CLF_DEPTH=2
-    CLF_DROPOUT=0.5
-    CLF_BATCH_SIZE=256
-    CLF_EPOCHS=120
-
-else
-    echo "ERROR: unknown PRESET='${PRESET}'. Use 'current' or 'paper'." >&2
-    exit 1
-fi
+MAKESET_ITERS=3
+MAKESET_INNER_OPTIM=sgd
+MAKESET_LR=0.01
 
 MOD_DIM=$(( LATENT_SPATIAL_DIM * LATENT_SPATIAL_DIM * LATENT_DIM ))
 
 MAX_TRAIN_SAMPLES=50000
 MAX_TEST_SAMPLES=10000
 
-CUDA_GPU=0
-LOG_SIGMAS_EVERY=50
+CUDA_GPU="${CUDA_GPU:-0}"
+LOG_SIGMAS_EVERY="${LOG_SIGMAS_EVERY:-50}"
+
+# CNN classifier (spatial phi grid)
+CLF_TYPE=cnn
+CLF_SAVE_SUBDIR=cifar10_cnn_classifier
+CNN_WIDTH=128
+CLF_DROPOUT=0.1
+CLF_LR=0.001
+CLF_BATCH_SIZE=256
+CLF_EPOCHS=120
+CLF_NORMALIZE_PHI=1
 
 # -----------------------------------------------------------------------------
 
@@ -136,16 +85,27 @@ if [[ "${META_INNER_OPTIM}" != "sgd" && "${META_INNER_OPTIM}" != "adam" ]]; then
     echo "ERROR: META_INNER_OPTIM must be 'sgd' or 'adam', got: ${META_INNER_OPTIM}" >&2
     exit 1
 fi
+if [[ "${MAKESET_INNER_OPTIM}" != "sgd" && "${MAKESET_INNER_OPTIM}" != "adam" ]]; then
+    echo "ERROR: MAKESET_INNER_OPTIM must be 'sgd' or 'adam', got: ${MAKESET_INNER_OPTIM}" >&2
+    exit 1
+fi
 
 EXT_LR_TAG=$(printf "%.0e" "${EXT_LR}")
 MAKESET_LR_TAG=$(printf "%.0e" "${MAKESET_LR}")
+LAM_TAG=$(printf "%.0e" "${SOFT_LIP_LAMBDA}")
 LCOORDS_TAG=$([ "${USE_LOCAL_COORDS}" -eq 1 ] && echo "lc" || echo "gc")
 
-SLUG="functa_like_cifar10_spatial_${PRESET}_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_freq${FREQ}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
+SLUG="functa_like_cifar10_spatial_${PRESET}_${INR_TYPE}_h${HIDDEN_DIM}_md${MOD_DIM}_d${DEPTH}_lat${LATENT_SPATIAL_DIM}x${LATENT_DIM}_freq${FREQ}_${SPATIAL_INTERP}_${LCOORDS_TAG}_${COORD_TAG}_extlr${EXT_LR_TAG}_e${EPOCHS}_inner${INNER_STEPS}_mopt${META_INNER_OPTIM}_adamphi${MAKESET_ITERS}_lr${MAKESET_LR_TAG}_softlip_${SOFT_LIP_CAP_TAG}_lam${LAM_TAG}_${SOFT_LIP_APPLY_TO}_train${MAX_TRAIN_SAMPLES}_test${MAX_TEST_SAMPLES}"
 
 VARIANT_FLAGS=(
-    --variant vanilla
+    --variant soft_lipschitz
+    --soft-lip-cap "${SOFT_LIP_CAP}"
+    --soft-lip-lambda "${SOFT_LIP_LAMBDA}"
+    --soft-lip-apply-to "${SOFT_LIP_APPLY_TO}"
 )
+if [[ "${SOFT_LIP_SKIP_FIRST}" -eq 1 ]]; then
+    VARIANT_FLAGS+=(--soft-lip-skip-first)
+fi
 
 SPATIAL_FLAGS=(
     --spatial-modulation
@@ -158,41 +118,12 @@ if [[ "${USE_LOCAL_COORDS}" -eq 1 ]]; then
     SPATIAL_FLAGS+=(--use-local-coords)
 fi
 
-INR_FLAGS=( --inr-type "${INR_TYPE}" )
-
-case "${INR_TYPE}" in
-    siren)
-        INR_FLAGS+=( --freq "${FREQ}" )
-        ;;
-    fourier_siren)
-        INR_FLAGS+=( --freq "${FREQ}" )
-        INR_FLAGS+=( --fourier-num-freqs "${FOURIER_NUM_FREQS}" --fourier-sigma "${FOURIER_SIGMA}" )
-        if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
-            INR_FLAGS+=( --fourier-include-input )
-        fi
-        ;;
-    finer)
-        INR_FLAGS+=( --freq "${FREQ}" --finer-first-bias-scale "${FINER_FIRST_BIAS_SCALE}" )
-        if [[ "${FINER_SCALE_REQ_GRAD}" -eq 1 ]]; then
-            INR_FLAGS+=( --finer-scale-req-grad )
-        fi
-        ;;
-    fourier_lsa)
-        INR_FLAGS+=( --lsa-num-freqs "${LSA_NUM_FREQS}" --lsa-sigma "${LSA_SIGMA}" )
-        INR_FLAGS+=( --fourier-num-freqs "${FOURIER_NUM_FREQS}" --fourier-sigma "${FOURIER_SIGMA}" )
-        if [[ "${FOURIER_INCLUDE_INPUT}" -eq 1 ]]; then
-            INR_FLAGS+=( --fourier-include-input )
-        fi
-        ;;
-    *)
-        echo "ERROR: unsupported INR_TYPE=${INR_TYPE}" >&2
-        exit 1
-        ;;
-esac
+INR_FLAGS=( --inr-type "${INR_TYPE}" --freq "${FREQ}" )
 
 MODEL_DIR="model_cifar10/${SLUG}"
 CHECKPOINT="${MODEL_DIR}/modSiren.pth"
 RUN_ROOT="runs/${SLUG}"
+CLF_DIR="${RUN_ROOT}/${CLF_SAVE_SUBDIR}"
 
 source /home/omarg/miniforge3/etc/profile.d/conda.sh
 conda activate pss
@@ -202,27 +133,21 @@ export CUDA_VISIBLE_DEVICES="${CUDA_GPU}"
 cd ~/SIREN_Vista || exit 1
 
 echo "============================================================"
-echo "Spatial Functa CIFAR-10 subset pipeline   (PRESET=${PRESET})"
+echo "Spatial Functa CIFAR-10 + soft-Lipschitz (PRESET=${PRESET})"
 echo "dataset            = cifar10"
+echo "variant            = soft_lipschitz (${SOFT_LIP_CAP_TAG} hardcoded caps)"
 echo "inr_type           = ${INR_TYPE}"
 echo "hidden_dim         = ${HIDDEN_DIM}"
 echo "mod_dim (flat)     = ${MOD_DIM}"
 echo "depth              = ${DEPTH}"
 echo "freq (omega0)      = ${FREQ}"
 echo "latent grid s,c    = ${LATENT_SPATIAL_DIM} x ${LATENT_DIM}"
-echo "spatial_interp     = ${SPATIAL_INTERP}"
-echo "use_local_coords   = ${USE_LOCAL_COORDS}"
 echo "meta epochs        = ${EPOCHS}"
-echo "meta int_lr        = ${INT_LR}"
-echo "meta ext_lr        = ${EXT_LR}"
-echo "meta inner optim   = ${META_INNER_OPTIM}  (trainer.py --inner-optim)"
-echo "inner steps        = ${INNER_STEPS}"
-echo "train batch size   = ${TRAIN_BATCH_SIZE}"
-echo "make iters         = ${MAKESET_ITERS}"
-echo "make optim         = ${MAKESET_INNER_OPTIM}"
-echo "make lr            = ${MAKESET_LR}"
-echo "train samples      = ${MAX_TRAIN_SAMPLES}"
-echo "test samples       = ${MAX_TEST_SAMPLES}"
+echo "meta inner optim   = ${META_INNER_OPTIM}  steps=${INNER_STEPS}  int_lr=${INT_LR}"
+echo "make optim         = ${MAKESET_INNER_OPTIM}  iters=${MAKESET_ITERS}  lr=${MAKESET_LR}"
+echo "soft_lip lambda    = ${SOFT_LIP_LAMBDA}  apply_to=${SOFT_LIP_APPLY_TO}"
+echo "train/test samples = ${MAX_TRAIN_SAMPLES} / ${MAX_TEST_SAMPLES}"
+echo "classifier         = ${CLF_TYPE}  save_dir=${CLF_SAVE_SUBDIR}"
 echo "slug               = ${SLUG}"
 echo "checkpoint         = ${CHECKPOINT}"
 echo "run root           = ${RUN_ROOT}"
@@ -233,7 +158,7 @@ echo
 python -c "import torch; print('cuda available:', torch.cuda.is_available()); print('visible gpus:', torch.cuda.device_count()); print('gpu name:', torch.cuda.get_device_name(0))"
 
 echo
-echo "Step 1/3: Training Spatial Functa CIFAR-10 backbone"
+echo "Step 1/3: Training spatial Functa backbone (soft-Lipschitz)"
 echo "          -> ${CHECKPOINT}"
 echo
 
@@ -276,6 +201,7 @@ fi
 
 CKPT_PATH="${CHECKPOINT}" \
 EXPECTED_MODEL_NAME="${SLUG}" \
+EXPECTED_VARIANT="soft_lipschitz" \
 EXPECTED_INR_TYPE="${INR_TYPE}" \
 EXPECTED_HIDDEN_DIM="${HIDDEN_DIM}" \
 EXPECTED_MOD_DIM="${MOD_DIM}" \
@@ -292,6 +218,7 @@ import torch
 
 ckpt_path = os.environ["CKPT_PATH"]
 expected_model_name = os.environ["EXPECTED_MODEL_NAME"]
+expected_variant = os.environ["EXPECTED_VARIANT"]
 ckpt = torch.load(ckpt_path, map_location="cpu")
 
 print("checkpoint metadata:")
@@ -299,7 +226,6 @@ print("  epoch:", ckpt.get("epoch"))
 print("  loss:", ckpt.get("loss"))
 print("  variant:", ckpt.get("variant"))
 print("  model_name:", ckpt.get("model_name"))
-print("  model_args:", ckpt.get("model_args"))
 
 if ckpt.get("model_name") != expected_model_name:
     print(
@@ -309,8 +235,15 @@ if ckpt.get("model_name") != expected_model_name:
     )
     sys.exit(1)
 
-model_args = ckpt.get("model_args", {})
+if ckpt.get("variant") != expected_variant:
+    print(
+        f"ERROR: checkpoint variant={ckpt.get('variant')!r} "
+        f"expected {expected_variant!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
+model_args = ckpt.get("model_args", {})
 expected_lat_s = int(os.environ["EXPECTED_LATENT_SPATIAL_DIM"])
 expected_lat_c = int(os.environ["EXPECTED_LATENT_DIM"])
 expected_mod_dim = int(os.environ["EXPECTED_MOD_DIM"])
@@ -372,7 +305,7 @@ print(f"Wrote backbone summary: {summary_path}")
 PYCKPT
 
 echo
-echo "Step 2/3: Creating ${MAX_TRAIN_SAMPLES}-train / ${MAX_TEST_SAMPLES}-test CIFAR-10 spatial functaset"
+echo "Step 2/3: Creating ${MAX_TRAIN_SAMPLES}-train / ${MAX_TEST_SAMPLES}-test spatial functaset (SGD phi, ${MAKESET_ITERS} iters)"
 echo "          -> ${RUN_ROOT}/functaset/${SLUG}_{train,val,test}.pkl"
 echo
 
@@ -447,8 +380,7 @@ print("saved:", out_path)
 actual_shape = tuple(first["modul"].shape)
 if actual_shape != expected_shape:
     print(
-        f"ERROR: combined modul shape={actual_shape}, expected {expected_shape}. "
-        "Did makeset.py load a stale checkpoint with a different latent grid?",
+        f"ERROR: combined modul shape={actual_shape}, expected {expected_shape}.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -460,28 +392,35 @@ if flat != expected_numel:
 PYCOMBINE
 
 echo
-echo "Step 3/3: Training downstream CIFAR-10 classifier (flattened spatial phi)"
-echo "          -> ${RUN_ROOT}/cifar10_classifier/best_classifier.pth"
+echo "Step 3/3: Training downstream spatial CNN classifier"
+echo "          -> ${CLF_DIR}/best_classifier.pth"
 echo
 
-pushd "${RUN_ROOT}" > /dev/null
+if [[ "${SKIP_CLASSIFIER}" == "1" ]]; then
+    echo "[skip] SKIP_CLASSIFIER=1"
+else
+    CLF_FLAGS=(
+        --dataset cifar10
+        --classifier-type "${CLF_TYPE}"
+        --functaset-path-train "${RUN_ROOT}/functaset/${SLUG}_train_all${MAX_TRAIN_SAMPLES}.pkl"
+        --functaset-path-test "${RUN_ROOT}/functaset/${SLUG}_test.pkl"
+        --latent-spatial-dim "${LATENT_SPATIAL_DIM}"
+        --latent-dim "${LATENT_DIM}"
+        --mod-dim "${MOD_DIM}"
+        --cnn-width "${CNN_WIDTH}"
+        --dropout "${CLF_DROPOUT}"
+        --lr "${CLF_LR}"
+        --batch-size "${CLF_BATCH_SIZE}"
+        --num-epochs "${CLF_EPOCHS}"
+        --device cuda
+        --save-dir "${CLF_DIR}"
+    )
+    if [[ "${CLF_NORMALIZE_PHI}" -eq 1 ]]; then
+        CLF_FLAGS+=(--normalize-phi)
+    fi
 
-python ~/SIREN_Vista/train_classifier.py \
-    --lr "${CLF_LR}" \
-    --cwidth "${CLF_WIDTH}" \
-    --mod-dim "${MOD_DIM}" \
-    --dropout "${CLF_DROPOUT}" \
-    --cdepth "${CLF_DEPTH}" \
-    --batch-size "${CLF_BATCH_SIZE}" \
-    --dataset cifar10 \
-    --num-epochs "${CLF_EPOCHS}" \
-    --data-path ~/data \
-    --functaset-path-train "./functaset/${SLUG}_train_all${MAX_TRAIN_SAMPLES}.pkl" \
-    --functaset-path-test "./functaset/${SLUG}_test.pkl" \
-    --classifier-type mlp \
-    --device cuda
-
-popd > /dev/null
+    python train_classifier.py "${CLF_FLAGS[@]}"
+fi
 
 echo
 echo "Writing classifier and run summaries"
@@ -490,9 +429,10 @@ echo
 RUN_ROOT="${RUN_ROOT}" \
 CKPT_PATH="${CHECKPOINT}" \
 SLUG="${SLUG}" \
+CLF_DIR="${CLF_DIR}" \
 CLF_EPOCHS="${CLF_EPOCHS}" \
-CLF_WIDTH="${CLF_WIDTH}" \
-CLF_DEPTH="${CLF_DEPTH}" \
+CLF_TYPE="${CLF_TYPE}" \
+CNN_WIDTH="${CNN_WIDTH}" \
 CLF_DROPOUT="${CLF_DROPOUT}" \
 CLF_LR="${CLF_LR}" \
 CLF_BATCH_SIZE="${CLF_BATCH_SIZE}" \
@@ -506,8 +446,8 @@ import torch
 run_root = os.environ["RUN_ROOT"]
 ckpt_path = os.environ["CKPT_PATH"]
 slug = os.environ["SLUG"]
+clf_dir = os.environ["CLF_DIR"]
 dataset = "cifar10"
-clf_dir = os.path.join(run_root, f"{dataset}_classifier")
 clf_path = os.path.join(clf_dir, "best_classifier.pth")
 acc_npy = os.path.join(clf_dir, "classifier_acc.npy")
 
@@ -532,15 +472,15 @@ lines = [
     f"- **path**: `{clf_path}`",
     f"- **dataset**: {dataset}",
     f"- **backbone slug**: `{slug}`",
+    f"- **classifier type**: {os.environ['CLF_TYPE']}",
     f"- **best top-1 accuracy**: {best_acc:.2f}%",
     f"- **best epoch**: {best_epoch}",
     f"- **num epochs trained**: {os.environ['CLF_EPOCHS']}",
-    f"- **classifier width**: {os.environ['CLF_WIDTH']}",
-    f"- **classifier depth**: {os.environ['CLF_DEPTH']}",
-    f"- **classifier dropout**: {os.environ['CLF_DROPOUT']}",
-    f"- **classifier lr**: {os.environ['CLF_LR']}",
-    f"- **classifier batch size**: {os.environ['CLF_BATCH_SIZE']}",
-    f"- **mod_dim (flat input)**: {os.environ['MOD_DIM']}",
+    f"- **cnn width**: {os.environ['CNN_WIDTH']}",
+    f"- **dropout**: {os.environ['CLF_DROPOUT']}",
+    f"- **lr**: {os.environ['CLF_LR']}",
+    f"- **batch size**: {os.environ['CLF_BATCH_SIZE']}",
+    f"- **mod_dim (flat)**: {os.environ['MOD_DIM']}",
 ]
 if top1_series is not None:
     lines += [
@@ -560,20 +500,20 @@ run_summary = [
     "",
     f"- **slug**: `{slug}`",
     f"- **run root**: `{run_root}`",
+    f"- **variant**: `{ckpt.get('variant')}`",
     "",
     "## Backbone",
     "",
     f"- **checkpoint**: `{ckpt_path}`",
     f"- **best epoch**: {ckpt.get('epoch')}",
     f"- **best loss (mean outer)**: {ckpt.get('loss')}",
-    f"- **variant**: `{ckpt.get('variant')}`",
     "",
     "## Classifier",
     "",
+    f"- **type**: {os.environ['CLF_TYPE']}",
     f"- **checkpoint**: `{clf_path}`",
     f"- **best top-1 accuracy**: {best_acc:.2f}%",
     f"- **best epoch**: {best_epoch}",
-    f"- **num epochs trained**: {os.environ['CLF_EPOCHS']}",
     "",
 ]
 out = os.path.join(run_root, "run_summary.md")
@@ -589,7 +529,7 @@ echo "Spatial checkpoint : ${CHECKPOINT}"
 echo "Backbone summary   : $(dirname "${CHECKPOINT}")/checkpoint_summary.md"
 echo "Functaset train    : ${RUN_ROOT}/functaset/${SLUG}_train_all${MAX_TRAIN_SAMPLES}.pkl"
 echo "Functaset test     : ${RUN_ROOT}/functaset/${SLUG}_test.pkl"
-echo "Classifier         : ${RUN_ROOT}/cifar10_classifier/best_classifier.pth"
-echo "Classifier summary : ${RUN_ROOT}/cifar10_classifier/checkpoint_summary.md"
+echo "CNN classifier     : ${CLF_DIR}/best_classifier.pth"
+echo "Classifier summary : ${CLF_DIR}/checkpoint_summary.md"
 echo "Run summary        : ${RUN_ROOT}/run_summary.md"
 echo "============================================================"
