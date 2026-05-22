@@ -1,0 +1,20 @@
+/home/omarg/miniforge3/envs/pss/lib/python3.10/site-packages/torch/cuda/__init__.py:107: UserWarning: CUDA initialization: Unexpected error from cudaGetDeviceCount(). Did you run some cuda functions before calling NumCudaDevices() that might have already set an error? Error 804: forward compatibility was attempted on non supported HW (Triggered internally at ../c10/cuda/CUDAFunctions.cpp:109.)
+  return torch._C._cuda_getDeviceCount() > 0
+Files already downloaded and verified
+[full-pgd-cifar10-spatial] loaded
+  siren checkpoint     : model_cifar10/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e512_inner3_moptsgd_adamphi3_lr1e-02_train50000_test10000/modSiren.pth
+  classifier checkpoint: runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e512_inner3_moptsgd_adamphi3_lr1e-02_train50000_test10000/cifar10_cnn_classifier/best_classifier.pth
+  model slug           : functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e512_inner3_moptsgd_adamphi3_lr1e-02_train50000_test10000
+  variant              : vanilla
+  classifier type      : cnn
+  spatial latent       : 8 x 8 x 16
+  classifier accuracy  : 70.45
+  0%|          | 0/1 [00:00<?, ?it/s][W NNPACK.cpp:64] Could not initialize NNPACK! Reason: Unsupported hardware.
+Clean MSE: 0.3211444914340973. Perturbation Final MSE: 0.24409091472625732
+eps=0.0627: n=1 clean=0.000 robust=0.000 robust|clean=0.000:   0%|          | 0/1 [00:00<?, ?it/s]eps=0.0627: n=1 clean=0.000 robust=0.000 robust|clean=0.000: 100%|██████████| 1/1 [00:00<00:00,  4.32it/s]eps=0.0627: n=1 clean=0.000 robust=0.000 robust|clean=0.000: 100%|██████████| 1/1 [00:00<00:00,  4.31it/s]
+
+[final] eps=0.062745 n=1
+[final]   clean correct           : 0/1  = 0.0000
+[final]   robust correct (uncond.): 0/1  = 0.0000
+[final]   robust|clean (condit.)  : 0/0  = 0.0000
+[final] wrote runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e512_inner3_moptsgd_adamphi3_lr1e-02_train50000_test10000/pgd_cifar10_spatial_cnn/eps16_n1.json

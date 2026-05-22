@@ -29,10 +29,12 @@ penalty flows gradients back into each penalized ``W_l`` because
 updated under ``torch.no_grad()``.
 """
 
+import os
+
 import torch
 import torch.nn as nn
 
-from SIREN import SineAffine, ModulatedSIREN, ModulatedSIREN3D
+from SIREN import SineAffine, FinerAffine, ModulatedSIREN, ModulatedSIREN3D
 
 from . import register
 
@@ -67,6 +69,15 @@ class SoftLipschitz:
                             "cannot tighten the certificate; its large "
                             "coord-input init (~5) also otherwise dominates "
                             "the penalty budget.")
+        g.add_argument("--soft-lip-reference-checkpoint", type=str, default=None,
+                       help="Optional checkpoint whose layer spectral norms are "
+                            "used as per-layer caps after multiplying by "
+                            "--soft-lip-reference-scale. This is useful for "
+                            "FINER/SIREN spatial runs where caps should be "
+                            "derived from a specific baseline backbone.")
+        g.add_argument("--soft-lip-reference-scale", type=float, default=0.90,
+                       help="Multiplier applied to reference checkpoint sigmas "
+                            "when --soft-lip-reference-checkpoint is set.")
 
     @staticmethod
     def build(base_model, args):
@@ -74,9 +85,7 @@ class SoftLipschitz:
 
     @staticmethod
     def penalty(model, args):
-        pairs = _collect_layers(model, args.soft_lip_apply_to,
-                                L=args.soft_lip_cap,
-                                skip_first=getattr(args, "soft_lip_skip_first", False))
+        pairs = _collect_layers(model, args)
         if not pairs:
             return torch.zeros((), device=next(model.parameters()).device)
         terms = []
@@ -87,9 +96,16 @@ class SoftLipschitz:
 
     @staticmethod
     def slug(args):
-        slug = (f"softlip_L{args.soft_lip_cap:g}"
-                f"_lam{args.soft_lip_lambda:.0e}"
-                f"_{args.soft_lip_apply_to}")
+        if getattr(args, "soft_lip_reference_checkpoint", None):
+            ref = os.path.basename(os.path.dirname(args.soft_lip_reference_checkpoint))
+            slug = (f"softlip_ref{ref[:16]}"
+                    f"_scale{args.soft_lip_reference_scale:g}"
+                    f"_lam{args.soft_lip_lambda:.0e}"
+                    f"_{args.soft_lip_apply_to}")
+        else:
+            slug = (f"softlip_L{args.soft_lip_cap:g}"
+                    f"_lam{args.soft_lip_lambda:.0e}"
+                    f"_{args.soft_lip_apply_to}")
         if getattr(args, "soft_lip_skip_first", False):
             slug += "_skip0"
         return slug
@@ -213,7 +229,28 @@ class SoftLipschitz:
 #     return pairs
 
 
-def _collect_layers(model, mode, L, skip_first=False):
+_REFERENCE_CAP_CACHE = {}
+
+
+def _collect_layers(model, args):
+    reference_checkpoint = getattr(args, "soft_lip_reference_checkpoint", None)
+    if reference_checkpoint:
+        return _collect_reference_scaled_layers(
+            model,
+            mode=args.soft_lip_apply_to,
+            reference_checkpoint=reference_checkpoint,
+            scale=float(getattr(args, "soft_lip_reference_scale", 0.90)),
+            skip_first=getattr(args, "soft_lip_skip_first", False),
+        )
+
+    return _collect_hardcoded_layers(
+        model,
+        mode=args.soft_lip_apply_to,
+        skip_first=getattr(args, "soft_lip_skip_first", False),
+    )
+
+
+def _collect_hardcoded_layers(model, mode, skip_first=False):
     """Return list of (nn.Linear, sigma_cap) pairs to penalize.
 
     HARD-CODED EXPERIMENT:
@@ -283,6 +320,82 @@ def _collect_layers(model, mode, L, skip_first=False):
 
     # Do not cap modul in this experiment.
     return pairs
+
+
+def _collect_reference_scaled_layers(model, mode, reference_checkpoint, scale, skip_first=False):
+    """Cap current model layers by `scale * sigma(reference layer)`.
+
+    Reference checkpoints use stable state_dict names for both SIREN and FINER:
+
+    - `siren.net.{i}.affine.weight`
+    - `siren.hidden2rgb.weight`
+    - `modul.weight` (only when `mode == "all"`)
+
+    Current layers are matched by order. This supports SIREN (`SineAffine`) and
+    FINER (`FinerAffine`) spatial/global backbones.
+    """
+    cache_key = (os.path.abspath(reference_checkpoint), float(scale), mode, bool(skip_first))
+    caps = _REFERENCE_CAP_CACHE.get(cache_key)
+    if caps is None:
+        caps = _reference_caps_from_checkpoint(
+            reference_checkpoint=reference_checkpoint,
+            scale=scale,
+            mode=mode,
+            skip_first=skip_first,
+        )
+        _REFERENCE_CAP_CACHE[cache_key] = caps
+
+    pairs = []
+    layer_idx = 0
+    for m in model.modules():
+        if isinstance(m, (SineAffine, FinerAffine)):
+            cap = caps.get(f"siren.net.{layer_idx}.affine.weight")
+            if cap is not None:
+                pairs.append((m.affine, cap))
+            layer_idx += 1
+
+    if mode in ("sine_and_readout", "all"):
+        siren = getattr(model, "siren", None)
+        if siren is not None and hasattr(siren, "hidden2rgb"):
+            cap = caps.get("siren.hidden2rgb.weight")
+            if cap is not None:
+                pairs.append((siren.hidden2rgb, cap))
+
+    if mode == "all":
+        modul = getattr(model, "modul", None)
+        cap = caps.get("modul.weight")
+        if modul is not None and cap is not None:
+            pairs.append((modul, cap))
+
+    return pairs
+
+
+def _reference_caps_from_checkpoint(reference_checkpoint, scale, mode, skip_first=False):
+    ckpt = torch.load(reference_checkpoint, map_location="cpu")
+    state = ckpt.get("state_dict", ckpt)
+    caps = {}
+
+    layer_idx = 0
+    while True:
+        key = f"siren.net.{layer_idx}.affine.weight"
+        if key not in state:
+            break
+        if not (skip_first and layer_idx == 0):
+            caps[key] = _exact_sigma(state[key]) * scale
+        layer_idx += 1
+
+    if mode in ("sine_and_readout", "all") and "siren.hidden2rgb.weight" in state:
+        caps["siren.hidden2rgb.weight"] = _exact_sigma(state["siren.hidden2rgb.weight"]) * scale
+
+    if mode == "all" and "modul.weight" in state:
+        caps["modul.weight"] = _exact_sigma(state["modul.weight"]) * scale
+
+    return caps
+
+
+def _exact_sigma(weight):
+    W2d = weight.detach().float().reshape(weight.shape[0], -1)
+    return float(torch.linalg.svdvals(W2d)[0].item())
 
 @torch.no_grad()
 def _update_uv(lin, n_iter):
