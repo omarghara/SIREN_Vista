@@ -1,0 +1,15 @@
+# Quick Classifier Evaluation Summary
+
+- **model slug**: `functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000`
+- **checkpoint**: `/home/omarg/SIREN_Vista/model_cifar10/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000/modSiren.pth`
+- **quick root**: `/home/omarg/SIREN_Vista/runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000/quick_eval/quick_eval_train1000_test1000`
+- **functaset train_all**: `/home/omarg/SIREN_Vista/runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000/quick_eval/quick_eval_train1000_test1000/functaset/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000_train_all10000.pkl`
+- **functaset test**: `/home/omarg/SIREN_Vista/runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000/quick_eval/quick_eval_train1000_test1000/functaset/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000_test.pkl`
+- **train subset size requested**: 10000
+- **test subset size requested**: 1000
+- **classifier type**: `cnn`
+- **classifier checkpoint**: `/home/omarg/SIREN_Vista/runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e277_inner3_moptsgd_adamphi3_lr1e-02_softlip_refvanilla_e277_scale0.90_lam1e-02_sine_and_readout_train50000_test10000/quick_eval/quick_eval_train1000_test1000/cifar10_cnn_classifier/best_classifier.pth`
+- **best epoch**: 24
+- **best top-1 accuracy**: 62.19999926757812
+- **final top-1**: 61.4000
+- **final top-5**: 95.6000

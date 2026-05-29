@@ -20,6 +20,42 @@ import variants
 from diagnostics import layer_sigmas, format_sigmas_one_liner
 
 
+def write_checkpoint_summary(savedir, ckpt):
+    """Write human-readable checkpoint_summary.md next to modSiren.pth."""
+    run_slug = ckpt.get('model_name') or os.path.basename(savedir.rstrip(os.sep))
+    rel_ckpt = f"{savedir}/modSiren.pth"
+    lines = [
+        "# Backbone checkpoint summary",
+        "",
+        f"- **path**: `{rel_ckpt}`",
+        f"- **model_name**: `{run_slug}`",
+        f"- **variant**: `{ckpt.get('variant', 'vanilla')}`",
+        f"- **epoch (best)**: {ckpt.get('epoch')}",
+        f"- **loss (best mean outer loss)**: {ckpt.get('loss')}",
+    ]
+    if ckpt.get('num_epochs_requested') is not None:
+        lines.append(f"- **num_epochs requested**: {ckpt['num_epochs_requested']}")
+    ers = ckpt.get('epoch_range_start')
+    ere = ckpt.get('epoch_range_end')
+    if ers is not None and ere is not None:
+        lines.append(f"- **training epoch range**: {ers}–{ere}")
+    lines.append("")
+
+    for section, key in (("model_args", "model_args"), ("variant_args", "variant_args")):
+        args_dict = ckpt.get(key)
+        if not args_dict:
+            continue
+        lines.append(f"## {section}")
+        lines.append("")
+        for k in sorted(args_dict.keys()):
+            lines.append(f"- `{k}`: {repr(args_dict[k])}")
+        lines.append("")
+
+    summary_path = os.path.join(savedir, "checkpoint_summary.md")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+
+
 def _prep_2d_batch(images, device):
     """Return images as (B, H*W, C) to match ModulatedSIREN output."""
     return images.to(device).permute(0, 2, 3, 1).reshape(images.size(0), -1, images.size(1))
@@ -372,6 +408,8 @@ if __name__ == '__main__':
     savedir = f"model_{args.dataset}/{run_slug}" if run_slug else f"model_{args.dataset}"
 
     os.makedirs(savedir, exist_ok=True)
+    initial_start_epoch = start_epoch
+    epoch_range_end = initial_start_epoch + args.num_epochs - 1
     for epoch in range(start_epoch, start_epoch + args.num_epochs):
         loss = fit(
             modSiren, dataloader, optimizer, criterion, epoch,
@@ -384,44 +422,51 @@ if __name__ == '__main__':
         )
         if loss < best_loss:
             best_loss = loss
-            torch.save({'epoch': epoch,
-                        'state_dict': modSiren.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': best_loss,
-                        'variant': args.variant,
-                        'model_name': run_slug,
-                        'variant_args': variants._extract_variant_args(args, args.variant),
-                        'model_args': {
-                            'dataset': args.dataset,
-                            'hidden_dim': args.hidden_dim,
-                            'mod_dim': args.mod_dim,
-                            'depth': args.depth,
-                            'height': getattr(modSiren, 'height', None),
-                            'width': getattr(modSiren, 'width', None),
-                            'out_features': getattr(modSiren, 'out_features', 1),
-                            'inr_type': args.inr_type,
-                            'fourier_num_freqs': args.fourier_num_freqs,
-                            'fourier_sigma': args.fourier_sigma,
-                            'fourier_include_input': args.fourier_include_input,
-                            'freq': args.freq,
-                            'finer_first_bias_scale': args.finer_first_bias_scale,
-                            'finer_scale_req_grad': args.finer_scale_req_grad,
-                            'coord_normalization': 'zero_one_pixel_centers',
-                            'inner_optim': args.inner_optim,
-                            'inner_lr': args.int_lr,
-                            'inner_steps': args.inner_steps,
-                            'lsa_num_harmonics': args.lsa_num_harmonics,
-                            'lsa_init_scale': args.lsa_init_scale,
-                            'lsa_include_linear': not args.lsa_no_linear,
-                            'spatial_modulation': bool(getattr(args, 'spatial_modulation', False)),
-                            'latent_spatial_dim': args.latent_spatial_dim,
-                            'latent_dim': args.latent_dim,
-                            'spatial_interp': args.spatial_interp,
-                            'use_local_coords': bool(args.use_local_coords),
-                            'modulation_type': args.modulation_type,
-                            'is_spatial': bool(getattr(modSiren, 'is_spatial', False)),
-                            'phi_shape': tuple(getattr(modSiren, 'phi_shape', (args.mod_dim,))),
-                            'phi_numel': int(getattr(modSiren, 'phi_numel', args.mod_dim)),
-                        },
-                        }, f'{savedir}/modSiren.pth')
+            ckpt_data = {
+                'epoch': epoch,
+                'state_dict': modSiren.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': best_loss,
+                'variant': args.variant,
+                'model_name': run_slug,
+                'num_epochs_requested': args.num_epochs,
+                'epoch_range_start': initial_start_epoch,
+                'epoch_range_end': epoch_range_end,
+                'variant_args': variants._extract_variant_args(args, args.variant),
+                'model_args': {
+                    'dataset': args.dataset,
+                    'hidden_dim': args.hidden_dim,
+                    'mod_dim': args.mod_dim,
+                    'depth': args.depth,
+                    'height': getattr(modSiren, 'height', None),
+                    'width': getattr(modSiren, 'width', None),
+                    'out_features': getattr(modSiren, 'out_features', 1),
+                    'inr_type': args.inr_type,
+                    'fourier_num_freqs': args.fourier_num_freqs,
+                    'fourier_sigma': args.fourier_sigma,
+                    'fourier_include_input': args.fourier_include_input,
+                    'freq': args.freq,
+                    'finer_first_bias_scale': args.finer_first_bias_scale,
+                    'finer_scale_req_grad': args.finer_scale_req_grad,
+                    'coord_normalization': 'zero_one_pixel_centers',
+                    'inner_optim': args.inner_optim,
+                    'inner_lr': args.int_lr,
+                    'inner_steps': args.inner_steps,
+                    'lsa_num_harmonics': args.lsa_num_harmonics,
+                    'lsa_init_scale': args.lsa_init_scale,
+                    'lsa_include_linear': not args.lsa_no_linear,
+                    'spatial_modulation': bool(getattr(args, 'spatial_modulation', False)),
+                    'latent_spatial_dim': args.latent_spatial_dim,
+                    'latent_dim': args.latent_dim,
+                    'spatial_interp': args.spatial_interp,
+                    'use_local_coords': bool(args.use_local_coords),
+                    'modulation_type': args.modulation_type,
+                    'is_spatial': bool(getattr(modSiren, 'is_spatial', False)),
+                    'phi_shape': tuple(getattr(modSiren, 'phi_shape', (args.mod_dim,))),
+                    'phi_numel': int(getattr(modSiren, 'phi_numel', args.mod_dim)),
+                },
+            }
+            ckpt_path = f'{savedir}/modSiren.pth'
+            torch.save(ckpt_data, ckpt_path)
+            write_checkpoint_summary(savedir, ckpt_data)
 

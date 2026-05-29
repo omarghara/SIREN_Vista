@@ -1,0 +1,15 @@
+{
+  "dataset": "cifar10",
+  "model_slug": "functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e12_inner3_moptsgd_adamphi3_lr1e-02_softlip_cap90_lam1e-02_sine_and_readout_train50000_test10000",
+  "classifier_type": "cnn",
+  "constraint": 0.00392156862745098,
+  "pgd_iters": 200,
+  "pgd_lr": 0.01,
+  "n_samples": 200,
+  "clean_correct": 125,
+  "robust_correct_unconditional": 43,
+  "both_correct": 42,
+  "clean_acc": 0.625,
+  "robust_acc": 0.215,
+  "conditional_robust_acc": 0.336
+}

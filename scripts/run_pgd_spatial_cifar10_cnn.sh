@@ -48,6 +48,10 @@ SEED="${SEED:-0}"
 CUDA_GPU="${CUDA_GPU:-0}"
 ATTACK_DEVICE="${ATTACK_DEVICE:-cuda}"
 
+# Set RUN_VANILLA=0 or RUN_SOFTLIP=0 to attack only one model.
+RUN_VANILLA="${RUN_VANILLA:-1}"
+RUN_SOFTLIP="${RUN_SOFTLIP:-1}"
+
 # -----------------------------------------------------------------------------
 source /home/omarg/miniforge3/etc/profile.d/conda.sh
 conda activate pss
@@ -92,8 +96,10 @@ except Exception as exc:
 PYCUDA
 echo
 
-for ck in "${VANILLA_CKPT}" "${VANILLA_CLASS}" "${SOFTLIP_CKPT}" "${SOFTLIP_CLASS}"; do
-    if [[ ! -f "${ck}" ]]; then
+for ck in \
+    $( [[ "${RUN_VANILLA}" == "1" ]] && echo "${VANILLA_CKPT} ${VANILLA_CLASS}" ) \
+    $( [[ "${RUN_SOFTLIP}" == "1" ]] && echo "${SOFTLIP_CKPT} ${SOFTLIP_CLASS}" ); do
+    if [[ -n "${ck}" && ! -f "${ck}" ]]; then
         echo "ERROR: missing checkpoint ${ck}" >&2
         exit 1
     fi
@@ -126,14 +132,22 @@ run_pgd() {
 
 echo
 echo "#### STAGE A: main eps=${MAIN_EPS}/255, n=${N_MAIN} ####"
-run_pgd "vanilla_spatial_siren_cnn" "${VANILLA_CKPT}" "${VANILLA_CLASS}" "${MAIN_EPS}" "${N_MAIN}"         "${VANILLA_OUT}/eps${MAIN_EPS}_n${N_MAIN}"
-run_pgd "softlip_spatial_siren_cnn" "${SOFTLIP_CKPT}" "${SOFTLIP_CLASS}" "${MAIN_EPS}" "${N_MAIN}"         "${SOFTLIP_OUT}/eps${MAIN_EPS}_n${N_MAIN}"
+if [[ "${RUN_VANILLA}" == "1" ]]; then
+    run_pgd "vanilla_spatial_siren_cnn" "${VANILLA_CKPT}" "${VANILLA_CLASS}" "${MAIN_EPS}" "${N_MAIN}"         "${VANILLA_OUT}/eps${MAIN_EPS}_n${N_MAIN}"
+fi
+if [[ "${RUN_SOFTLIP}" == "1" ]]; then
+    run_pgd "softlip_spatial_siren_cnn" "${SOFTLIP_CKPT}" "${SOFTLIP_CLASS}" "${MAIN_EPS}" "${N_MAIN}"         "${SOFTLIP_OUT}/eps${MAIN_EPS}_n${N_MAIN}"
+fi
 
 echo
 echo "#### STAGE B: epsilon sweep (n=${N_SWEEP}; eps=${MAIN_EPS} already in stage A) ####"
 for eps in "${SWEEP_EPS[@]}"; do
-    run_pgd "vanilla_spatial_siren_cnn" "${VANILLA_CKPT}" "${VANILLA_CLASS}" "${eps}" "${N_SWEEP}"             "${VANILLA_OUT}/eps${eps}_n${N_SWEEP}"
-    run_pgd "softlip_spatial_siren_cnn" "${SOFTLIP_CKPT}" "${SOFTLIP_CLASS}" "${eps}" "${N_SWEEP}"             "${SOFTLIP_OUT}/eps${eps}_n${N_SWEEP}"
+    if [[ "${RUN_VANILLA}" == "1" ]]; then
+        run_pgd "vanilla_spatial_siren_cnn" "${VANILLA_CKPT}" "${VANILLA_CLASS}" "${eps}" "${N_SWEEP}"             "${VANILLA_OUT}/eps${eps}_n${N_SWEEP}"
+    fi
+    if [[ "${RUN_SOFTLIP}" == "1" ]]; then
+        run_pgd "softlip_spatial_siren_cnn" "${SOFTLIP_CKPT}" "${SOFTLIP_CLASS}" "${eps}" "${N_SWEEP}"             "${SOFTLIP_OUT}/eps${eps}_n${N_SWEEP}"
+    fi
 done
 
 echo
@@ -148,10 +162,11 @@ import os
 
 os.chdir(os.path.expanduser("~/SIREN_Vista"))
 
-roots = [
-    ("vanilla_spatial_siren_cnn", "${VANILLA_OUT}"),
-    ("softlip_spatial_siren_cnn", "${SOFTLIP_OUT}"),
-]
+roots = []
+if ${RUN_VANILLA}:
+    roots.append(("vanilla_spatial_siren_cnn", "${VANILLA_OUT}"))
+if ${RUN_SOFTLIP}:
+    roots.append(("softlip_spatial_siren_cnn", "${SOFTLIP_OUT}"))
 
 runs = []
 for label, root in roots:

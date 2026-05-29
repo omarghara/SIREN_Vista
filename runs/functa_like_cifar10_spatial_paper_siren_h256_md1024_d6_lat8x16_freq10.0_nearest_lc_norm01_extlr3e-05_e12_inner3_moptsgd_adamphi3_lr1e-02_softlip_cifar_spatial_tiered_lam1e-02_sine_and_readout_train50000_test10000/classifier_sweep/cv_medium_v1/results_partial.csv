@@ -1,0 +1,2 @@
+rank,config_key,mean_val_top1,std_val_top1,mean_val_top5,lr,dropout,cnn_width,batch_size,weight_decay,label_smoothing,normalize_phi
+,lr0.0001_wd0_do0_w64_bs128_ls0_norm1,59.470000000000006,0.37325594435989967,95.55199999999999,0.0001,0.0,64,128,0.0,0.0,True
