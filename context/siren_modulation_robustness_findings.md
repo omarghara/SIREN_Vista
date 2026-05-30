@@ -1,5 +1,92 @@
 # Summary of Findings and Conclusions — SIREN / Modulation Robustness Debugging
 
+## 0. Current CIFAR-10 Addendum
+
+As of 2026-05-30, the active project focus is no longer only MNIST. The
+current target is CIFAR-10 with a Spatial Functa-style INR:
+
+```text
+CIFAR-10 image x
+   -> fit spatial modulation grid phi(x)
+   -> classify phi(x)
+   -> improve robustness to PGD using Lipschitz/spectral control
+```
+
+The key implementation pivot came from Spatial Functa:
+
+```text
+https://arxiv.org/abs/2302.03130
+```
+
+After implementing spatial latent grids, the repo reached good CIFAR
+reconstruction and semi-good classification:
+
+- spatial phi shape: `8 x 8 x 16`
+- relevant model: `SIREN.py::SpatialModulatedINR`
+- relevant classifier: CNN over spatial phi
+- earlier clean classifier range: roughly `67%` to `72%`
+- current matched inner-5 classifier range: roughly `75%` to `76%`
+- tuned softlip-tiered classifier test top-1: `70.98%`
+- matched inner-5 rerun classifiers:
+  - vanilla e512: `76.27%` logged top-1
+  - softlip tiered e12: `75.73%` logged top-1
+
+Current patched no-clip matched inner-5 CIFAR PGD-200 evidence:
+
+| model | eps (/255) | clean acc | robust acc | robust \| clean |
+|---|---:|---:|---:|---:|
+| vanilla e512 inner5 | 1 | 0.790 | 0.540 | 0.684 |
+| softlip tiered e12 inner5 | 1 | 0.820 | 0.575 | 0.701 |
+| vanilla e512 inner5 | 2 | 0.790 | 0.280 | 0.354 |
+| softlip tiered e12 inner5 | 2 | 0.820 | 0.315 | 0.384 |
+| vanilla e512 inner5 | 4 | 0.790 | 0.040 | 0.0506 |
+| softlip tiered e12 inner5 | 4 | 0.820 | 0.065 | 0.0793 |
+| vanilla e512 inner5 | 6 | 0.790 | 0.000 | 0.000 |
+| softlip tiered e12 inner5 | 6 | 0.820 | 0.005 | 0.0061 |
+| vanilla e512 inner5 | 8 | 0.790 | 0.000 | 0.000 |
+| softlip tiered e12 inner5 | 8 | 0.820 | 0.000 | 0.000 |
+
+The matched inner-5 rerun uses new functasets made with `5` inner phi steps,
+new CNN classifiers trained on those functasets, and PGD `--mod-steps 5`.
+The corrected attack disables clean/final refit gradient clipping to match
+`makeset.py`. Softlip tiered has a small clean, robust, and
+conditional-robust edge at eps `1/255`, `2/255`, and `4/255`. Both models
+are essentially collapsed by eps `6/255` and fully collapsed by eps `8/255`.
+
+Older CIFAR PGD-200 evidence with attack inner phi steps = `10`:
+
+| model | eps (/255) | clean acc | robust acc | robust \| clean |
+|---|---:|---:|---:|---:|
+| vanilla spatial SIREN | 1 | 0.755 | 0.400 | 0.530 |
+| softlip cap90 spatial SIREN | 1 | 0.625 | 0.215 | 0.336 |
+| vanilla spatial SIREN | 2 | 0.755 | 0.105 | 0.139 |
+| softlip cap90 spatial SIREN | 2 | 0.625 | 0.140 | 0.216 |
+| vanilla spatial SIREN | 4 | 0.755 | 0.005 | 0.0066 |
+| softlip cap90 spatial SIREN | 4 | 0.625 | 0.035 | 0.056 |
+| vanilla spatial SIREN | 8 | 0.755 | 0.005 | 0.0066 |
+| softlip cap90 spatial SIREN | 8 | 0.625 | 0.015 | 0.024 |
+
+Interpretation:
+
+- Spatial Functa solved the CIFAR representation bottleneck.
+- The older cap90 run gave a weak-positive robustness signal at eps `2/255`
+  and above, especially conditionally on clean-correct samples.
+- The patched no-clip matched inner-5 rerun shows a small softlip tiered
+  robustness gain at eps `1/255` to `4/255`, with softlip also slightly
+  cleaner on the first-200 subset (`82%` vs `79%`).
+- The result is **not thesis-ready** yet because the gain is small, the
+  sample count is only 200, and absolute robust accuracy is still low.
+- The next CIFAR task is scaling the corrected protocol to larger `n` and
+  validating attack strength.
+
+Detailed CIFAR state:
+
+```text
+context/cifar10_spatial_functa_status.md
+```
+
+---
+
 ## 1. Project pipeline reminder
 
 The pipeline we are studying is:

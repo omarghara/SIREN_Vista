@@ -9,7 +9,7 @@
 - **test subset size requested**: 10000
 - **classifier type**: `cnn`
 - **classifier checkpoint**: `/home/omarg/SIREN_Vista/runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e12_inner3_moptsgd_adamphi3_lr1e-02_softlip_cifar_spatial_tiered_lam1e-02_sine_and_readout_train50000_test10000/quick_eval/quick_eval_train1000_test1000/cifar10_cnn_classifier/best_classifier.pth`
-- **best epoch**: 66
-- **best top-1 accuracy**: 71.14
-- **final top-1**: 70.7100
-- **final top-5**: 97.6500
+- **best epoch**: 65
+- **best top-1 accuracy**: 71.2
+- **final top-1**: 70.9300
+- **final top-5**: 97.2700

@@ -1,5 +1,120 @@
 # Full-PGD on soft-Lipschitz SIREN — live results
 
+## Current CIFAR-10 Attack Status
+
+Updated: 2026-05-30
+
+The active attack focus is now CIFAR-10 Spatial Functa. Older MNIST notes
+below are historical context.
+
+Current CIFAR attack entry point:
+
+```text
+attacks/full_pgd_cifar10_spatial.py
+```
+
+Current relevant model family:
+
+```text
+CIFAR-10 image
+   -> SpatialModulatedINR, phi shape 8 x 8 x 16
+   -> CNN classifier over spatial phi
+   -> PGD attack on pixels, differentiating through phi fitting
+```
+
+Most relevant saved PGD-200 result now is the patched no-clip matched
+inner-5 rerun. This uses new functasets made with `5` inner phi steps, new
+CNN classifiers trained on those functasets, and attack-time `--mod-steps 5`.
+The clean/final attack refit now disables gradient clipping by default, which
+matches `makeset.py`.
+
+Artifacts:
+
+- root: `runs/cifar10_spatial_inner5_make5_clfbest_v1`
+- vanilla script: `scripts/run_cifar10_spatial_inner5_vanilla.sh`
+- softlip script: `scripts/run_cifar10_spatial_inner5_softlip.sh`
+- vanilla classifier:
+  `runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512/cifar10_cnn_classifier_best_sweep_inner5/best_classifier.pth`
+- softlip classifier:
+  `runs/cifar10_spatial_inner5_make5_clfbest_v1/softlip_tiered_e12/cifar10_cnn_classifier_best_sweep_inner5/best_classifier.pth`
+
+Matched inner-5 classifier logs:
+
+| model | best logged top-1 |
+|---|---:|
+| vanilla e512 inner5 | 76.27% |
+| softlip tiered e12 inner5 | 75.73% |
+
+Patched no-clip matched inner-5 PGD-200 results:
+
+| model | eps (/255) | n | clean acc | robust acc | robust \| clean |
+|---|---:|---:|---:|---:|---:|
+| vanilla e512 inner5 | 1 | 200 | 0.790 | 0.540 | 0.684 |
+| softlip tiered e12 inner5 | 1 | 200 | 0.820 | 0.575 | 0.701 |
+| vanilla e512 inner5 | 2 | 200 | 0.790 | 0.280 | 0.354 |
+| softlip tiered e12 inner5 | 2 | 200 | 0.820 | 0.315 | 0.384 |
+| vanilla e512 inner5 | 4 | 200 | 0.790 | 0.040 | 0.0506 |
+| softlip tiered e12 inner5 | 4 | 200 | 0.820 | 0.065 | 0.0793 |
+| vanilla e512 inner5 | 6 | 200 | 0.790 | 0.000 | 0.000 |
+| softlip tiered e12 inner5 | 6 | 200 | 0.820 | 0.005 | 0.0061 |
+| vanilla e512 inner5 | 8 | 200 | 0.790 | 0.000 | 0.000 |
+| softlip tiered e12 inner5 | 8 | 200 | 0.820 | 0.000 | 0.000 |
+
+Interpretation:
+
+- The fitting-budget mismatch is fixed, and the clean/final refit now matches
+  `makeset.py` by not clipping phi gradients.
+- The old `61%` softlip clean accuracy was caused by clipped attack-time
+  clean refitting. With the patch, first-200 clean accuracy is `79%` for
+  vanilla and `82%` for softlip.
+- Softlip tiered slightly beats vanilla in robust accuracy at eps `1/255`,
+  `2/255`, `4/255`, and `6/255`, and has a slightly better
+  robust-given-clean rate at eps `1/255` through `6/255`.
+- The advantage is still small: +3.5 pp robust at eps `1/255`, +3.5 pp at
+  eps `2/255`, +2.5 pp at eps `4/255`, and +0.5 pp at eps `6/255`.
+- At eps `6/255`, vanilla has `0/200` robust samples and softlip has `1/200`;
+  at eps `8/255`, both are completely broken by PGD on the first 200 test
+  images.
+
+Earlier saved PGD-200 results with attack inner phi steps = `10`:
+
+| model | eps (/255) | n | clean acc | robust acc | robust \| clean |
+|---|---:|---:|---:|---:|---:|
+| vanilla spatial SIREN | 1 | 200 | 0.755 | 0.400 | 0.530 |
+| softlip cap90 spatial SIREN | 1 | 200 | 0.625 | 0.215 | 0.336 |
+| vanilla spatial SIREN | 2 | 200 | 0.755 | 0.105 | 0.139 |
+| softlip cap90 spatial SIREN | 2 | 200 | 0.625 | 0.140 | 0.216 |
+| vanilla spatial SIREN | 4 | 200 | 0.755 | 0.005 | 0.0066 |
+| softlip cap90 spatial SIREN | 4 | 200 | 0.625 | 0.035 | 0.056 |
+| vanilla spatial SIREN | 6 | 200 | 0.755 | 0.005 | 0.0066 |
+| softlip cap90 spatial SIREN | 6 | 200 | 0.625 | 0.015 | 0.024 |
+| vanilla spatial SIREN | 8 | 200 | 0.755 | 0.005 | 0.0066 |
+| softlip cap90 spatial SIREN | 8 | 200 | 0.625 | 0.015 | 0.024 |
+
+Earlier-run interpretation:
+
+- The softlip cap90 CIFAR run improves robust/conditional accuracy relative
+  to vanilla for eps `2/255` and above.
+- The result is not yet strong enough: softlip clean accuracy is much lower
+  on the attacked subset, and robust accuracy is still low in absolute terms.
+- Do not mix these numbers with the matched inner-5 rerun, because this
+  older attack used a different fitting budget.
+
+Do not use these artifacts as final claims without checking classifier paths:
+
+- `runs/pgd_cifar10_spatial_cnn_summary.md` is older and vanilla-only.
+- `pgd_cifar10_spatial_cnn_cv_quick_v1` for the tiered softlip run shows
+  suspiciously low clean accuracy despite better classifier summaries.
+- `eps16_n1.json` in the cap90 folder is only a one-sample smoke test.
+
+Full CIFAR context:
+
+```text
+context/cifar10_spatial_functa_status.md
+```
+
+---
+
 Tracking log for the first (and so far only) Full-PGD run against the
 softlip backbone, MNIST, eps = 16/255, PGD 100 × mod 10. Baseline vanilla
 run has **not** been executed yet, so every "gain vs vanilla" number here

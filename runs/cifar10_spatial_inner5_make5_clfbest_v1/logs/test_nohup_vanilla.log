@@ -1,0 +1,28 @@
+== CIFAR-10 vanilla inner-5 pipeline ==
+  run root      : runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512
+  checkpoint    : model_cifar10/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e512_inner3_moptsgd_adamphi3_lr1e-02_train50000_test10000/modSiren.pth
+  data path     : ../data
+  make fit      : steps=5, lr=0.01, optim=sgd
+  classifier    : cnn width=256, lr=0.003, dropout=0.1, normalize_phi=1, epochs=40
+  pgd           : eps=1 2 4 6 /255, n=200, pgd_steps=200, mod_steps=5
+
+cuda available: True
+visible gpus: 1
+gpu name: NVIDIA GeForce RTX 2080 Ti
+# CIFAR-10 Spatial-Functa PGD Summary - vanilla inner5
+
+Run root: runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512
+
+Attack mod steps: 5
+PGD steps: 200
+
+| model | eps (/255) | n | clean acc | robust acc | robust/clean | gap |
+|---|---:|---:|---:|---:|---:|---:|
+| vanilla_e512 | 8 | 200 | 0.7600 | 0.0000 | 0.0000 | +0.7600 |
+[summary] JSON: runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512/pgd_inner5_summary.json
+[summary] MD  : runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512/pgd_inner5_summary.md
+
+Done.
+  Run root : runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512
+  Config   : runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512/run_config.md
+  Summary  : runs/cifar10_spatial_inner5_make5_clfbest_v1/vanilla_e512/pgd_inner5_summary.md

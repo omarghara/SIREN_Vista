@@ -16,6 +16,67 @@ The README also lists the main datasets as **MNIST**, **Fashion-MNIST**, and **M
 
 This master's thesis is about **parameter-space classifiers built on implicit neural representations (INRs)**.
 
+## Current active focus: CIFAR-10 Spatial Functa
+
+As of 2026-05-30, the active research target is **CIFAR-10 robustness**.
+The MNIST results are useful background, but the next claim needs to be on
+CIFAR-10:
+
+```text
+CIFAR-10 image
+   -> fit spatial phi grid with Spatial Functa-style INR
+   -> classify spatial phi
+   -> improve PGD robustness using Lipschitz/spectral control
+```
+
+The immediate objective is to show that a Lipschitz-regularized spatial INR
+can make the downstream CIFAR-10 parameter-space classifier more robust to
+PGD attacks.
+
+The repo reached the CIFAR regime only after implementing ideas from:
+
+```text
+Spatial Functa: Scaling Functa to ImageNet Classification and Generation
+https://arxiv.org/abs/2302.03130
+```
+
+That paper motivates using spatially arranged latent representations because
+ordinary/global Functa struggles to scale to CIFAR-10-like complexity. In this
+repo, the practical implementation is `SIREN.py::SpatialModulatedINR` with
+an `8 x 8 x 16` latent grid, nearest cell lookup, local coordinates, and a
+CNN classifier over spatial phi.
+
+Current CIFAR status lives in:
+
+```text
+context/cifar10_spatial_functa_status.md
+```
+
+Short version:
+
+- Spatial Functa now gives good CIFAR reconstruction.
+- CNN classifiers over spatial phi first reached roughly `67%` to `72%`
+  top-1; the current matched inner-5 classifiers are around `76%`.
+- New matched inner-5 functasets/classifiers were created for vanilla e512
+  and softlip tiered e12. The classifiers log `76.27%` and `75.73%` top-1.
+- `attacks/full_pgd_cifar10_spatial.py` was patched so the clean/final phi
+  refit no longer clips modulation gradients by default. This matches
+  `makeset.py`; the older clipped PGD rerun artificially underfit softlip phi.
+- The patched no-clip matched inner-5 PGD-200 sweep over eps
+  `{1,2,4,6,8}/255` gives softlip tiered slightly better clean and robust
+  accuracy at eps `1/255`, `2/255`, `4/255`, and `6/255`; both models are at
+  `0.0` robust by eps `8/255`.
+- Clean accuracy inside the patched attack is now matched to the saved
+  functaset subset: `0.790` vanilla vs `0.820` softlip tiered on the first
+  `200` CIFAR-10 test images.
+- Earlier cap90 PGD-200 results showed a weak-positive softlip signal at eps
+  `2/255` and above, but those used attack `mod_steps=10` and should not be
+  mixed with the new matched inner-5 protocol.
+- The CIFAR robustness result is improved but not thesis-ready yet; the next
+  issue is scaling the corrected no-clip protocol to larger `n`, adding
+  stronger attack checks, and understanding why both models collapse by
+  eps `6/255` to `8/255`.
+
 ### Core pipeline
 Instead of classifying directly in signal space (for example raw pixels), the pipeline is:
 
@@ -121,7 +182,16 @@ Why it matters:
 - introduces modulation-based representations,
 - gives the weight/modulation-space learning pipeline that this project builds on.
 
-### 3. Weight-space background paper from the advisor list
+### 3. Spatial Functa / CIFAR scaling
+- **Spatial Functa: Scaling Functa to ImageNet Classification and Generation**
+- Link: https://arxiv.org/abs/2302.03130
+
+Why it matters:
+- explains why ordinary Functa has difficulty scaling to CIFAR-10 and richer images,
+- motivates spatial latent grids instead of one global modulation vector,
+- is the basis for the current CIFAR-10 implementation in `SpatialModulatedINR`.
+
+### 4. Weight-space background paper from the advisor list
 - Link currently listed: https://arxiv.org/abs/1706.05806
 
 Important note:
@@ -130,7 +200,7 @@ Important note:
 - If the advisor intended a true weight-generation / parameter-space background paper, the likely intended paper may have been:
   - **HyperNetworks**: https://arxiv.org/abs/1609.09106
 
-### 4. Main attack paper this thesis builds on
+### 5. Main attack paper this thesis builds on
 - **Adversarial Attacks in Weight-Space Classifiers**
 - OpenReview: https://openreview.net/forum?id=eOLybAlili
 

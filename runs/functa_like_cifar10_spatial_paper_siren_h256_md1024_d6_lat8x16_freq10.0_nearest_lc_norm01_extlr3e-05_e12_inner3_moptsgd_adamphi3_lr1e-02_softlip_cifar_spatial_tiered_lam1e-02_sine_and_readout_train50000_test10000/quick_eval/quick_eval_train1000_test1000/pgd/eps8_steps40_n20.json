@@ -6,10 +6,10 @@
   "pgd_iters": 40,
   "pgd_lr": 0.01,
   "n_samples": 20,
-  "clean_correct": 6,
-  "robust_correct_unconditional": 1,
-  "both_correct": 1,
-  "clean_acc": 0.3,
-  "robust_acc": 0.05,
-  "conditional_robust_acc": 0.16666666666666666
+  "clean_correct": 8,
+  "robust_correct_unconditional": 0,
+  "both_correct": 0,
+  "clean_acc": 0.4,
+  "robust_acc": 0.0,
+  "conditional_robust_acc": 0.0
 }

@@ -186,6 +186,11 @@ def get_args():
              '{stem}_train.pkl, {stem}_val.pkl, {stem}_test.pkl. '
              'Defaults to the dataset name (e.g. cifar10).',
     )
+    parser.add_argument(
+        '--save-train-all', action='store_true', default=False,
+        help='Also save the unsplit training functaset as '
+             '{stem}_train_all{N}.pkl before creating train/val split.',
+    )
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Pass "cuda" to use gpu')
     parser.add_argument('--variant', choices=variants.available(), default='vanilla',
                         help='SIREN variant used at training time. Must match the '
@@ -471,6 +476,13 @@ if __name__ == '__main__':
         lbfgs=args.lbfgs,
         inner_optim=args.inner_optim,
     )
+
+    if args.save_train_all:
+        os.makedirs(f'{args.saveroot}/functaset', exist_ok=True)
+        joblib.dump(
+            functa_trainset,
+            f'{args.saveroot}/functaset/{functaset_stem}_train_all{len(functa_trainset)}.pkl',
+        )
 
     split(
         functa_trainset,

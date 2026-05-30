@@ -5,6 +5,56 @@ The goal is to preserve context for future work, another AI agent, or a thesis/r
 
 ---
 
+# Current Active Thread: CIFAR-10
+
+As of 2026-05-30, the active goal is CIFAR-10 robustness, not only MNIST.
+
+The current thesis target is:
+
+```text
+CIFAR-10 image
+   -> Spatial Functa phi grid
+   -> classifier over phi
+   -> improve PGD robustness with Lipschitz/spectral regularization
+```
+
+Important update:
+
+- Standard/global SIREN Functa was not enough for CIFAR-10.
+- FINER/Fourier/LSA variants were explored while searching for better CIFAR
+  reconstruction.
+- The practical breakthrough came after implementing ideas from
+  **Spatial Functa: Scaling Functa to ImageNet Classification and Generation**
+  (`https://arxiv.org/abs/2302.03130`).
+- Current spatial setup uses an `8 x 8 x 16` latent grid and a CNN classifier
+  over spatial phi.
+- Classifier accuracy first reached the rough `67%` to `72%` range; the
+  current matched inner-5 CNN classifiers are around `76%`.
+- New matched inner-5 functasets/classifiers were created for vanilla e512
+  and softlip tiered e12. The classifiers log `76.27%` and `75.73%` top-1.
+- `attacks/full_pgd_cifar10_spatial.py` was patched so clean/final phi refits
+  use no gradient clipping by default, matching `makeset.py`. The previous
+  clipped rerun underfit softlip phi and caused a false clean-accuracy gap.
+- The patched no-clip matched inner-5 PGD-200 sweep over eps
+  `{1,2,4,6,8}/255` gives a small softlip tiered edge at eps `1/255`,
+  `2/255`, `4/255`, and `6/255`, and `0.0` robust accuracy for both models
+  by eps `8/255`.
+- Clean accuracy inside the patched attack is now `0.790` for vanilla and
+  `0.820` for softlip tiered on the first 200 CIFAR-10 test images.
+- Earlier cap90 PGD-200 results showed softlip improvement at eps `2/255`
+  and above, but those used attack `mod_steps=10` and should be treated as
+  historical context rather than the current pinned comparison.
+- The next CIFAR step is scaling the corrected no-clip protocol to larger
+  sample counts and adding stronger attack checks.
+
+Use this file for the detailed CIFAR state:
+
+```text
+context/cifar10_spatial_functa_status.md
+```
+
+---
+
 # 1. Project Goal
 
 We are studying a **parameter-space classification pipeline** based on modulated SIRENs.
@@ -1044,4 +1094,3 @@ forward smoothness
 and
 inverse conditioning / identifiability
 ```
-

@@ -280,12 +280,21 @@ def check_model_classifier_compat(inr, classifier):
 
 
 class FullPGDCIFAR10Spatial(nn.Module):
-    def __init__(self, inr, classifier, inner_steps=10, inner_lr=0.01, device="cuda"):
+    def __init__(
+        self,
+        inr,
+        classifier,
+        inner_steps=10,
+        inner_lr=0.01,
+        clean_grad_clip=0.0,
+        device="cuda",
+    ):
         super().__init__()
         self.inr = inr.to(device).eval()
         self.classifier = classifier.to(device).eval()
         self.inner_steps = int(inner_steps)
         self.inner_lr = float(inner_lr)
+        self.clean_grad_clip = float(clean_grad_clip)
         self.device = device
         self.inner_criterion = nn.MSELoss().to(device)
 
@@ -321,7 +330,8 @@ class FullPGDCIFAR10Spatial(nn.Module):
                 inner_loss = self.inner_criterion(fitted, target)
                 mse = float(inner_loss.item())
                 inner_loss.backward()
-                torch.nn.utils.clip_grad_norm_([modulator], 1.0)
+                if self.clean_grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_([modulator], self.clean_grad_clip)
                 inner_optimizer.step()
             else:
                 fitted = self.inr(modulator)
@@ -469,6 +479,15 @@ def get_args():
     parser.add_argument("--ext-lr", type=float, default=0.01)
     parser.add_argument("--mod-steps", type=int, default=10)
     parser.add_argument("--pgd-steps", type=int, default=100)
+    parser.add_argument(
+        "--clean-grad-clip",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional grad-norm clip for non-differentiable clean/final phi "
+            "fitting. Default 0 disables clipping to match makeset.py."
+        ),
+    )
     parser.add_argument("--data-path", type=str, default="../data")
     parser.add_argument("--siren-checkpoint", type=str, required=True)
     parser.add_argument("--classifier-checkpoint", type=str, required=True)
@@ -529,6 +548,7 @@ if __name__ == "__main__":
         classifier,
         inner_steps=args.mod_steps,
         inner_lr=args.inner_lr,
+        clean_grad_clip=args.clean_grad_clip,
         device=args.device,
     ).to(args.device)
     criterion = nn.CrossEntropyLoss().to(args.device)
