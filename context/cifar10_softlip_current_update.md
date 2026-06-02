@@ -1,6 +1,6 @@
 # CIFAR-10 Softlip Current Status Update
 
-Updated: 2026-05-30
+Updated: 2026-06-02
 
 ## Goal
 
@@ -139,7 +139,7 @@ not be used for the current CIFAR comparison.
 Protocol:
 
 - attack: `attacks/full_pgd_cifar10_spatial.py`
-- samples: first `200` CIFAR-10 test images
+- samples: first `1000` CIFAR-10 test images for the current estimate
 - PGD steps: `200`
 - PGD LR: `0.01`
 - inner phi fit steps during attack: `5`
@@ -149,31 +149,33 @@ Protocol:
 
 | model | eps (/255) | n | clean acc | robust acc | robust given clean |
 |---|---:|---:|---:|---:|---:|
-| vanilla e512 inner5 | 1 | 200 | 0.790 | 0.540 | 0.684 |
-| softlip tiered e12 inner5 | 1 | 200 | 0.820 | 0.575 | 0.701 |
-| vanilla e512 inner5 | 2 | 200 | 0.790 | 0.280 | 0.354 |
-| softlip tiered e12 inner5 | 2 | 200 | 0.820 | 0.315 | 0.384 |
-| vanilla e512 inner5 | 4 | 200 | 0.790 | 0.040 | 0.0506 |
-| softlip tiered e12 inner5 | 4 | 200 | 0.820 | 0.065 | 0.0793 |
-| vanilla e512 inner5 | 6 | 200 | 0.790 | 0.000 | 0.000 |
-| softlip tiered e12 inner5 | 6 | 200 | 0.820 | 0.005 | 0.0061 |
-| vanilla e512 inner5 | 8 | 200 | 0.790 | 0.000 | 0.000 |
-| softlip tiered e12 inner5 | 8 | 200 | 0.820 | 0.000 | 0.000 |
+| vanilla e512 inner5 | 1 | 1000 | 0.761 | 0.527 | 0.693 |
+| softlip tiered e12 inner5 | 1 | 1000 | 0.763 | 0.534 | 0.700 |
+| vanilla e512 inner5 | 2 | 1000 | 0.761 | 0.312 | 0.410 |
+| softlip tiered e12 inner5 | 2 | 1000 | 0.763 | 0.319 | 0.418 |
+| vanilla e512 inner5 | 4 | 1000 | 0.761 | 0.044 | 0.0578 |
+| softlip tiered e12 inner5 | 4 | 1000 | 0.763 | 0.064 | 0.0839 |
+| vanilla e512 inner5 | 6 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 6 | 1000 | 0.763 | 0.005 | 0.0066 |
+| vanilla e512 inner5 | 8 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 8 | 1000 | 0.763 | 0.001 | 0.0013 |
 
 ## Current Interpretation
 
-The corrected attack now gives comparable clean accuracy. On this first-200
-subset, softlip is slightly better than vanilla both clean and robust:
+The corrected attack now gives comparable clean accuracy. On the first 1000
+test images, softlip is nearly clean-matched to vanilla and slightly more
+robust at eps `1/255`, `2/255`, `4/255`, and `6/255`:
 
-- clean: `82.0%` softlip vs `79.0%` vanilla
-- eps `1/255`: `57.5%` robust vs `54.0%`
-- eps `2/255`: `31.5%` robust vs `28.0%`
-- eps `4/255`: `6.5%` robust vs `4.0%`
+- clean: `76.3%` softlip vs `76.1%` vanilla
+- eps `1/255`: `53.4%` robust vs `52.7%`
+- eps `2/255`: `31.9%` robust vs `31.2%`
+- eps `4/255`: `6.4%` robust vs `4.4%`
 
-The signal is positive but still small. By eps `6/255`, both models are almost
-fully broken, and by eps `8/255`, both have `0%` robust accuracy on this
-subset.
+The signal is positive but still small. By eps `6/255`, both models are
+almost fully broken (`5/1000` robust for softlip, `3/1000` for vanilla).
+By eps `8/255`, both are essentially broken; vanilla has `3/1000` robust
+samples and softlip has `1/1000`.
 
-Next step: rerun the corrected no-clip protocol on a larger sample count,
-starting with `n=1000`, and then add attack-strength checks such as PGD LR
-sweeps, random restarts, and more inner fitting steps.
+Next step: add attack-strength checks such as PGD LR sweeps, random restarts,
+and more inner fitting steps, and rerun promising warm-start variants under
+the same corrected protocol.

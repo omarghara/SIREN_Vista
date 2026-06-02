@@ -1,0 +1,15 @@
+{
+  "dataset": "cifar10",
+  "model_slug": "cifar10_spatial_warmvanilla_prereadout_counter1.0_lam1e-2",
+  "classifier_type": "cnn",
+  "constraint": 0.00784313725490196,
+  "pgd_iters": 200,
+  "pgd_lr": 0.01,
+  "n_samples": 200,
+  "clean_correct": 168,
+  "robust_correct_unconditional": 56,
+  "both_correct": 56,
+  "clean_acc": 0.84,
+  "robust_acc": 0.28,
+  "conditional_robust_acc": 0.3333333333333333
+}

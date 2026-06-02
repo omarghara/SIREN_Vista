@@ -7,7 +7,7 @@ The goal is to preserve context for future work, another AI agent, or a thesis/r
 
 # Current Active Thread: CIFAR-10
 
-As of 2026-05-30, the active goal is CIFAR-10 robustness, not only MNIST.
+As of 2026-06-02, the active goal is CIFAR-10 robustness, not only MNIST.
 
 The current thesis target is:
 
@@ -36,16 +36,21 @@ Important update:
   use no gradient clipping by default, matching `makeset.py`. The previous
   clipped rerun underfit softlip phi and caused a false clean-accuracy gap.
 - The patched no-clip matched inner-5 PGD-200 sweep over eps
-  `{1,2,4,6,8}/255` gives a small softlip tiered edge at eps `1/255`,
-  `2/255`, `4/255`, and `6/255`, and `0.0` robust accuracy for both models
-  by eps `8/255`.
-- Clean accuracy inside the patched attack is now `0.790` for vanilla and
-  `0.820` for softlip tiered on the first 200 CIFAR-10 test images.
+  `{1,2,4,6,8}/255` now has `n=1000` results. Softlip tiered has nearly
+  equal clean accuracy to vanilla (`0.763` vs `0.761`) and a small robust
+  edge at eps `1/255`, `2/255`, `4/255`, and `6/255`.
+- The clearest `n=1000` softlip edge is eps `4/255`: `0.064` robust for
+  softlip vs `0.044` for vanilla. Both models are essentially broken by eps
+  `8/255`.
+- A warm-start regularizer sweep was run on top of the vanilla e512 backbone.
+  The completed 76%-class cap/orthogonal variants do not yet dominate softlip
+  tiered. The aggressive readout-counter variant looks more robust but used
+  an interrupted, lower-accuracy classifier, so it needs a clean rerun.
 - Earlier cap90 PGD-200 results showed softlip improvement at eps `2/255`
   and above, but those used attack `mod_steps=10` and should be treated as
   historical context rather than the current pinned comparison.
-- The next CIFAR step is scaling the corrected no-clip protocol to larger
-  sample counts and adding stronger attack checks.
+- The next CIFAR step is attack-strength checking and clean reruns of the
+  promising/incomplete warm-start leads.
 
 Use this file for the detailed CIFAR state:
 

@@ -51,6 +51,8 @@ def _extract_variant_args(args, name):
     prefix_map = {
         "vanilla": None,
         "soft_lipschitz": "soft_lip_",
+        "orthogonal": "orth_",
+        "spectral_cap": "spec_cap_",
     }
     prefix = prefix_map.get(name)
     if prefix is None:
@@ -58,4 +60,4 @@ def _extract_variant_args(args, name):
     return {k: v for k, v in vars(args).items() if k.startswith(prefix)}
 
 
-from . import vanilla, soft_lipschitz  # noqa: F401, E402 — registers on import
+from . import vanilla, soft_lipschitz, orthogonal, spectral_cap  # noqa: F401, E402 — registers on import

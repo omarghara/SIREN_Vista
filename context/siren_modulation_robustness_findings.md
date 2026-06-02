@@ -2,7 +2,7 @@
 
 ## 0. Current CIFAR-10 Addendum
 
-As of 2026-05-30, the active project focus is no longer only MNIST. The
+As of 2026-06-02, the active project focus is no longer only MNIST. The
 current target is CIFAR-10 with a Spatial Functa-style INR:
 
 ```text
@@ -33,25 +33,25 @@ reconstruction and semi-good classification:
 
 Current patched no-clip matched inner-5 CIFAR PGD-200 evidence:
 
-| model | eps (/255) | clean acc | robust acc | robust \| clean |
-|---|---:|---:|---:|---:|
-| vanilla e512 inner5 | 1 | 0.790 | 0.540 | 0.684 |
-| softlip tiered e12 inner5 | 1 | 0.820 | 0.575 | 0.701 |
-| vanilla e512 inner5 | 2 | 0.790 | 0.280 | 0.354 |
-| softlip tiered e12 inner5 | 2 | 0.820 | 0.315 | 0.384 |
-| vanilla e512 inner5 | 4 | 0.790 | 0.040 | 0.0506 |
-| softlip tiered e12 inner5 | 4 | 0.820 | 0.065 | 0.0793 |
-| vanilla e512 inner5 | 6 | 0.790 | 0.000 | 0.000 |
-| softlip tiered e12 inner5 | 6 | 0.820 | 0.005 | 0.0061 |
-| vanilla e512 inner5 | 8 | 0.790 | 0.000 | 0.000 |
-| softlip tiered e12 inner5 | 8 | 0.820 | 0.000 | 0.000 |
+| model | eps (/255) | n | clean acc | robust acc | robust \| clean |
+|---|---:|---:|---:|---:|---:|
+| vanilla e512 inner5 | 1 | 1000 | 0.761 | 0.527 | 0.693 |
+| softlip tiered e12 inner5 | 1 | 1000 | 0.763 | 0.534 | 0.700 |
+| vanilla e512 inner5 | 2 | 1000 | 0.761 | 0.312 | 0.410 |
+| softlip tiered e12 inner5 | 2 | 1000 | 0.763 | 0.319 | 0.418 |
+| vanilla e512 inner5 | 4 | 1000 | 0.761 | 0.044 | 0.0578 |
+| softlip tiered e12 inner5 | 4 | 1000 | 0.763 | 0.064 | 0.0839 |
+| vanilla e512 inner5 | 6 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 6 | 1000 | 0.763 | 0.005 | 0.0066 |
+| vanilla e512 inner5 | 8 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 8 | 1000 | 0.763 | 0.001 | 0.0013 |
 
 The matched inner-5 rerun uses new functasets made with `5` inner phi steps,
 new CNN classifiers trained on those functasets, and PGD `--mod-steps 5`.
 The corrected attack disables clean/final refit gradient clipping to match
-`makeset.py`. Softlip tiered has a small clean, robust, and
-conditional-robust edge at eps `1/255`, `2/255`, and `4/255`. Both models
-are essentially collapsed by eps `6/255` and fully collapsed by eps `8/255`.
+`makeset.py`. Softlip tiered has nearly matched clean accuracy and a small
+robust/conditional-robust edge at eps `1/255`, `2/255`, and `4/255`. Both
+models are essentially collapsed by eps `6/255` and `8/255`.
 
 Older CIFAR PGD-200 evidence with attack inner phi steps = `10`:
 
@@ -72,12 +72,12 @@ Interpretation:
 - The older cap90 run gave a weak-positive robustness signal at eps `2/255`
   and above, especially conditionally on clean-correct samples.
 - The patched no-clip matched inner-5 rerun shows a small softlip tiered
-  robustness gain at eps `1/255` to `4/255`, with softlip also slightly
-  cleaner on the first-200 subset (`82%` vs `79%`).
-- The result is **not thesis-ready** yet because the gain is small, the
-  sample count is only 200, and absolute robust accuracy is still low.
-- The next CIFAR task is scaling the corrected protocol to larger `n` and
-  validating attack strength.
+  robustness gain at eps `1/255` to `4/255`; at `n=1000`, the clearest edge
+  is eps `4/255` (`0.064` vs `0.044` robust).
+- The result is **not thesis-ready** yet because the gain is small and
+  absolute robust accuracy is still low.
+- The next CIFAR task is validating attack strength and cleanly rerunning
+  promising warm-start variants.
 
 Detailed CIFAR state:
 

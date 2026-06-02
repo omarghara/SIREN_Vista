@@ -56,6 +56,29 @@ def write_checkpoint_summary(savedir, ckpt):
         f.write("\n".join(lines).rstrip() + "\n")
 
 
+def load_model_weights_only(model, checkpoint_path, device, strict=True):
+    """Initialize model weights from a checkpoint without optimizer/history."""
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state = ckpt.get('state_dict', ckpt)
+    result = model.load_state_dict(state, strict=strict)
+    print(f"[init] loaded model weights from '{checkpoint_path}'")
+    if not strict:
+        missing, unexpected = result
+        if missing:
+            print(f"[init] missing keys: {missing}")
+        if unexpected:
+            print(f"[init] unexpected keys: {unexpected}")
+    ckpt_variant = ckpt.get('variant')
+    ckpt_name = ckpt.get('model_name')
+    ckpt_loss = ckpt.get('loss')
+    if ckpt_name is not None:
+        print(f"[init] source model_name={ckpt_name}")
+    if ckpt_variant is not None:
+        print(f"[init] source variant={ckpt_variant}")
+    if ckpt_loss is not None:
+        print(f"[init] source best_loss={ckpt_loss}")
+
+
 def _prep_2d_batch(images, device):
     """Return images as (B, H*W, C) to match ModulatedSIREN output."""
     return images.to(device).permute(0, 2, 3, 1).reshape(images.size(0), -1, images.size(1))
@@ -310,6 +333,15 @@ def get_args():
                         help='Path to a .pth checkpoint to resume training from. '
                              'Loads model weights, optimizer state (if present), '
                              'epoch counter, and best_loss.')
+    parser.add_argument('--init-from-checkpoint', type=str, default=None,
+                        help='Path to a .pth checkpoint used only to initialize '
+                             'model weights for a fresh run. Unlike --resume, this '
+                             'does not load optimizer state, epoch counter, or '
+                             'best_loss. Use this to fine-tune a new variant on top '
+                             'of an already-trained vanilla backbone.')
+    parser.add_argument('--init-nonstrict', action='store_true', default=False,
+                        help='Use non-strict state_dict loading with '
+                             '--init-from-checkpoint. Default is strict loading.')
     parser.add_argument('--variant', choices=variants.available(), default='vanilla',
                         help='SIREN variant to train.')
     parser.add_argument('--model-name', '--run-name', dest='model_name',
@@ -377,6 +409,15 @@ if __name__ == '__main__':
     
     modSiren = modSiren.to(args.device)
     modSiren = variants.build(args.variant, modSiren, args)
+    if args.resume is not None and args.init_from_checkpoint is not None:
+        raise SystemExit("Use either --resume or --init-from-checkpoint, not both.")
+    if args.init_from_checkpoint is not None:
+        load_model_weights_only(
+            modSiren,
+            args.init_from_checkpoint,
+            device=device,
+            strict=not args.init_nonstrict,
+        )
     optimizer = optim.Adam(modSiren.parameters(), lr=args.ext_lr)
     criterion = nn.MSELoss().cuda() if torch.cuda.is_available() else nn.MSELoss()
     penalty_fn = lambda m: variants.penalty(args.variant, m, args)
@@ -469,4 +510,3 @@ if __name__ == '__main__':
             ckpt_path = f'{savedir}/modSiren.pth'
             torch.save(ckpt_data, ckpt_path)
             write_checkpoint_summary(savedir, ckpt_data)
-

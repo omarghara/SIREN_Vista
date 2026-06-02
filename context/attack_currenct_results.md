@@ -2,7 +2,7 @@
 
 ## Current CIFAR-10 Attack Status
 
-Updated: 2026-05-30
+Updated: 2026-06-02
 
 The active attack focus is now CIFAR-10 Spatial Functa. Older MNIST notes
 below are historical context.
@@ -23,10 +23,11 @@ CIFAR-10 image
 ```
 
 Most relevant saved PGD-200 result now is the patched no-clip matched
-inner-5 rerun. This uses new functasets made with `5` inner phi steps, new
-CNN classifiers trained on those functasets, and attack-time `--mod-steps 5`.
-The clean/final attack refit now disables gradient clipping by default, which
-matches `makeset.py`.
+inner-5 rerun, including the completed `n=1000` vanilla-vs-softlip sweep.
+This uses new functasets made with `5` inner phi steps, new CNN classifiers
+trained on those functasets, and attack-time `--mod-steps 5`. The clean/final
+attack refit now disables gradient clipping by default, which matches
+`makeset.py`.
 
 Artifacts:
 
@@ -49,14 +50,24 @@ Patched no-clip matched inner-5 PGD-200 results:
 
 | model | eps (/255) | n | clean acc | robust acc | robust \| clean |
 |---|---:|---:|---:|---:|---:|
+| vanilla e512 inner5 | 1 | 1000 | 0.761 | 0.527 | 0.693 |
+| softlip tiered e12 inner5 | 1 | 1000 | 0.763 | 0.534 | 0.700 |
 | vanilla e512 inner5 | 1 | 200 | 0.790 | 0.540 | 0.684 |
 | softlip tiered e12 inner5 | 1 | 200 | 0.820 | 0.575 | 0.701 |
+| vanilla e512 inner5 | 2 | 1000 | 0.761 | 0.312 | 0.410 |
+| softlip tiered e12 inner5 | 2 | 1000 | 0.763 | 0.319 | 0.418 |
 | vanilla e512 inner5 | 2 | 200 | 0.790 | 0.280 | 0.354 |
 | softlip tiered e12 inner5 | 2 | 200 | 0.820 | 0.315 | 0.384 |
+| vanilla e512 inner5 | 4 | 1000 | 0.761 | 0.044 | 0.0578 |
+| softlip tiered e12 inner5 | 4 | 1000 | 0.763 | 0.064 | 0.0839 |
 | vanilla e512 inner5 | 4 | 200 | 0.790 | 0.040 | 0.0506 |
 | softlip tiered e12 inner5 | 4 | 200 | 0.820 | 0.065 | 0.0793 |
+| vanilla e512 inner5 | 6 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 6 | 1000 | 0.763 | 0.005 | 0.0066 |
 | vanilla e512 inner5 | 6 | 200 | 0.790 | 0.000 | 0.000 |
 | softlip tiered e12 inner5 | 6 | 200 | 0.820 | 0.005 | 0.0061 |
+| vanilla e512 inner5 | 8 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 8 | 1000 | 0.763 | 0.001 | 0.0013 |
 | vanilla e512 inner5 | 8 | 200 | 0.790 | 0.000 | 0.000 |
 | softlip tiered e12 inner5 | 8 | 200 | 0.820 | 0.000 | 0.000 |
 
@@ -67,14 +78,79 @@ Interpretation:
 - The old `61%` softlip clean accuracy was caused by clipped attack-time
   clean refitting. With the patch, first-200 clean accuracy is `79%` for
   vanilla and `82%` for softlip.
-- Softlip tiered slightly beats vanilla in robust accuracy at eps `1/255`,
-  `2/255`, `4/255`, and `6/255`, and has a slightly better
-  robust-given-clean rate at eps `1/255` through `6/255`.
-- The advantage is still small: +3.5 pp robust at eps `1/255`, +3.5 pp at
-  eps `2/255`, +2.5 pp at eps `4/255`, and +0.5 pp at eps `6/255`.
-- At eps `6/255`, vanilla has `0/200` robust samples and softlip has `1/200`;
-  at eps `8/255`, both are completely broken by PGD on the first 200 test
-  images.
+- On `n=1000`, softlip tiered has nearly equal clean accuracy (`0.763` vs
+  `0.761`) and a small robust-accuracy edge at eps `1/255`, `2/255`,
+  `4/255`, and `6/255`.
+- The largest `n=1000` gain is at eps `4/255`: `0.064` robust for softlip
+  versus `0.044` for vanilla.
+- At eps `8/255`, both are essentially broken; vanilla has `3/1000` robust
+  and softlip has `1/1000`.
+
+Warm-start regularizer sweep, same matched inner-5 PGD-200 protocol:
+
+Artifacts:
+
+- root: `runs/cifar10_spatial_inner5_warmstart_models`
+- detailed context:
+  `context/cifar10_warmstart_regularizer_experiments.md`
+- generic pipeline:
+  `scripts/run_cifar10_spatial_inner5_checkpoint.sh`
+
+Classifier validation summary:
+
+| model | best val top-1 | note |
+|---|---:|---|
+| `warm_readout_cap10_lam1` | 76.86% | completed |
+| `warm_prereadout_cap10_lam1` | 76.75% | completed |
+| `warm_prereadout_counter1_lam1e-2` | 76.76% | completed |
+| `warm_readout_cap50_lam1` | 76.42% | completed |
+| `warm_orth_lam1e-3` | 76.27% | completed |
+| `warm_readout_counter1_lam1e-2` | 70.20% | interrupted after epoch 10 |
+| `warm_readout_cap90_lam1` | missing | makeset interrupted |
+
+PGD-200 results, `n=200`:
+
+| model | eps (/255) | clean acc | robust acc | robust / clean |
+|---|---:|---:|---:|---:|
+| `warm_readout_cap10_lam1` | 1 | 0.790 | 0.530 | 0.671 |
+| `warm_readout_cap10_lam1` | 2 | 0.790 | 0.320 | 0.405 |
+| `warm_readout_cap10_lam1` | 4 | 0.790 | 0.040 | 0.0506 |
+| `warm_readout_cap10_lam1` | 6 | 0.790 | 0.000 | 0.000 |
+| `warm_readout_cap10_lam1` | 8 | 0.790 | 0.000 | 0.000 |
+| `warm_prereadout_cap10_lam1` | 1 | 0.815 | 0.545 | 0.669 |
+| `warm_prereadout_cap10_lam1` | 2 | 0.815 | 0.345 | 0.423 |
+| `warm_prereadout_cap10_lam1` | 4 | 0.815 | 0.020 | 0.0245 |
+| `warm_prereadout_cap10_lam1` | 6 | 0.815 | 0.000 | 0.000 |
+| `warm_prereadout_cap10_lam1` | 8 | 0.815 | 0.000 | 0.000 |
+| `warm_readout_cap50_lam1` | 1 | 0.830 | 0.500 | 0.602 |
+| `warm_readout_cap50_lam1` | 2 | 0.830 | 0.310 | 0.373 |
+| `warm_readout_cap50_lam1` | 4 | 0.830 | 0.040 | 0.0482 |
+| `warm_readout_cap50_lam1` | 6 | 0.830 | 0.005 | 0.0060 |
+| `warm_readout_cap50_lam1` | 8 | 0.830 | 0.005 | 0.0060 |
+| `warm_prereadout_counter1_lam1e-2` | 1 | 0.840 | 0.535 | 0.637 |
+| `warm_prereadout_counter1_lam1e-2` | 2 | 0.840 | 0.280 | 0.333 |
+| `warm_prereadout_counter1_lam1e-2` | 4 | 0.840 | 0.040 | 0.0476 |
+| `warm_prereadout_counter1_lam1e-2` | 6 | 0.840 | 0.000 | 0.000 |
+| `warm_prereadout_counter1_lam1e-2` | 8 | 0.840 | 0.000 | 0.000 |
+| `warm_orth_lam1e-3` | 1 | 0.770 | 0.490 | 0.630 |
+| `warm_orth_lam1e-3` | 2 | 0.770 | 0.260 | 0.338 |
+| `warm_orth_lam1e-3` | 4 | 0.770 | 0.010 | 0.0130 |
+| `warm_orth_lam1e-3` | 6 | 0.770 | 0.005 | 0.0065 |
+| `warm_orth_lam1e-3` | 8 | 0.770 | 0.000 | 0.000 |
+| `warm_readout_counter1_lam1e-2` | 1 | 0.720 | 0.515 | 0.715 |
+| `warm_readout_counter1_lam1e-2` | 2 | 0.720 | 0.395 | 0.549 |
+| `warm_readout_counter1_lam1e-2` | 4 | 0.720 | 0.070 | 0.0972 |
+| `warm_readout_counter1_lam1e-2` | 6 | 0.720 | 0.025 | 0.0347 |
+
+Warm-start interpretation:
+
+- The 76%-class warm-start cap/orthogonal models do not yet beat softlip
+  tiered convincingly.
+- `warm_prereadout_cap10_lam1` is the best completed warm-start result at
+  eps `2/255`, but it does not hold up at eps `4/255`.
+- `warm_readout_counter1_lam1e-2` is the most robust-looking variant, but its
+  classifier was interrupted early and eps `8/255` is missing, so treat this
+  as a lead to rerun, not a final result.
 
 Earlier saved PGD-200 results with attack inner phi steps = `10`:
 

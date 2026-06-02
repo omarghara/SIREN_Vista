@@ -1,6 +1,6 @@
 # CIFAR-10 Spatial Functa Robustness Status
 
-Updated: 2026-05-30
+Updated: 2026-06-02
 
 ## Active Goal
 
@@ -181,39 +181,116 @@ Attack protocol:
 - inner phi steps: `5`
 - inner phi LR: `0.01`
 - clean/final phi grad clipping: disabled, matching `makeset.py`
-- samples: first `200` CIFAR-10 test examples
+- samples: first `1000` CIFAR-10 test examples for the current estimate;
+  first-`200` rows are retained only for comparison with earlier quick runs
 - classifier: newly trained CNN over the matching inner-5 spatial phi
 
 Completed patched no-clip matched inner-5 PGD-200 sweep:
 
 | model | eps (/255) | n | clean acc | robust acc | robust \| clean |
 |---|---:|---:|---:|---:|---:|
+| vanilla e512 inner5 | 1 | 1000 | 0.761 | 0.527 | 0.693 |
+| softlip tiered e12 inner5 | 1 | 1000 | 0.763 | 0.534 | 0.700 |
 | vanilla e512 inner5 | 1 | 200 | 0.790 | 0.540 | 0.684 |
 | softlip tiered e12 inner5 | 1 | 200 | 0.820 | 0.575 | 0.701 |
+| vanilla e512 inner5 | 2 | 1000 | 0.761 | 0.312 | 0.410 |
+| softlip tiered e12 inner5 | 2 | 1000 | 0.763 | 0.319 | 0.418 |
 | vanilla e512 inner5 | 2 | 200 | 0.790 | 0.280 | 0.354 |
 | softlip tiered e12 inner5 | 2 | 200 | 0.820 | 0.315 | 0.384 |
+| vanilla e512 inner5 | 4 | 1000 | 0.761 | 0.044 | 0.0578 |
+| softlip tiered e12 inner5 | 4 | 1000 | 0.763 | 0.064 | 0.0839 |
 | vanilla e512 inner5 | 4 | 200 | 0.790 | 0.040 | 0.0506 |
 | softlip tiered e12 inner5 | 4 | 200 | 0.820 | 0.065 | 0.0793 |
+| vanilla e512 inner5 | 6 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 6 | 1000 | 0.763 | 0.005 | 0.0066 |
 | vanilla e512 inner5 | 6 | 200 | 0.790 | 0.000 | 0.000 |
 | softlip tiered e12 inner5 | 6 | 200 | 0.820 | 0.005 | 0.0061 |
+| vanilla e512 inner5 | 8 | 1000 | 0.761 | 0.003 | 0.0039 |
+| softlip tiered e12 inner5 | 8 | 1000 | 0.763 | 0.001 | 0.0013 |
 | vanilla e512 inner5 | 8 | 200 | 0.790 | 0.000 | 0.000 |
 | softlip tiered e12 inner5 | 8 | 200 | 0.820 | 0.000 | 0.000 |
 
-Softlip tiered has slightly higher clean accuracy on this first-200 subset
-and slightly higher unconditional and conditional robust accuracy at eps
-`1/255`, `2/255`, and `4/255`. At eps `6/255`, vanilla has `0/200` robust
-samples and softlip has `1/200`; at eps `8/255`, both are fully broken on
-this 200-image subset.
+On `n=1000`, softlip tiered has nearly matched clean accuracy (`0.763` vs
+`0.761`) and a small robust-accuracy edge at eps `1/255`, `2/255`, `4/255`,
+and `6/255`. The largest difference is at eps `4/255`: softlip has `64/1000`
+robust samples versus vanilla `44/1000`. At eps `8/255`, both are essentially
+broken and vanilla is slightly higher (`3/1000` vs `1/1000`), which is within
+tiny-count noise.
 
-Delta, softlip minus vanilla:
+The earlier first-200 subset showed a larger clean gap (`0.820` vs `0.790`),
+but the `n=1000` sweep is the better current estimate.
+
+Delta, softlip minus vanilla, `n=1000`:
 
 | eps (/255) | clean delta | robust delta | robust \| clean delta |
 |---:|---:|---:|---:|
-| 1 | +0.030 | +0.035 | +0.0177 |
-| 2 | +0.030 | +0.035 | +0.0297 |
-| 4 | +0.030 | +0.025 | +0.0287 |
-| 6 | +0.030 | +0.005 | +0.0061 |
-| 8 | +0.030 | +0.000 | +0.000 |
+| 1 | +0.002 | +0.007 | +0.0074 |
+| 2 | +0.002 | +0.007 | +0.0081 |
+| 4 | +0.002 | +0.020 | +0.0261 |
+| 6 | +0.002 | +0.002 | +0.0026 |
+| 8 | +0.002 | -0.002 | -0.0026 |
+
+### Warm-start regularizer sweep on vanilla e512
+
+After the matched inner-5 vanilla/softlip comparison, several new CIFAR
+backbones were meta-trained by warm-starting from the vanilla e512 checkpoint
+and adding late-layer spectral or orthogonality penalties. Each completed
+backbone then used the same inner-5 pipeline:
+
+```text
+make functaset with 5 phi steps -> train CNN classifier -> PGD-200 with 5 phi steps
+```
+
+Artifacts:
+
+- warm-start training launcher:
+  `scripts/run_cifar10_spatial_warmstart_regularizer.sh`
+- generic checkpoint evaluation launcher:
+  `scripts/run_cifar10_spatial_inner5_checkpoint.sh`
+- result root:
+  `runs/cifar10_spatial_inner5_warmstart_models`
+- detailed experiment notes:
+  `context/cifar10_warmstart_regularizer_experiments.md`
+
+Classifier validation summary:
+
+| model | best val top-1 | status |
+|---|---:|---|
+| `warm_readout_cap10_lam1` | 76.86% | complete |
+| `warm_prereadout_cap10_lam1` | 76.75% | complete |
+| `warm_prereadout_counter1_lam1e-2` | 76.76% | complete |
+| `warm_readout_cap50_lam1` | 76.42% | complete |
+| `warm_orth_lam1e-3` | 76.27% | complete |
+| `warm_readout_counter1_lam1e-2` | 70.20% | classifier interrupted after epoch 10 |
+| `warm_readout_cap90_lam1` | missing | makeset interrupted before classifier |
+
+PGD-200 results, `n=200`:
+
+| model | eps1 robust | eps2 robust | eps4 robust | eps6 robust | eps8 robust | clean acc |
+|---|---:|---:|---:|---:|---:|---:|
+| vanilla e512 inner5 | 0.540 | 0.280 | 0.040 | 0.000 | 0.000 | 0.790 |
+| softlip tiered e12 inner5 | 0.575 | 0.315 | 0.065 | 0.005 | 0.000 | 0.820 |
+| `warm_readout_cap10_lam1` | 0.530 | 0.320 | 0.040 | 0.000 | 0.000 | 0.790 |
+| `warm_prereadout_cap10_lam1` | 0.545 | 0.345 | 0.020 | 0.000 | 0.000 | 0.815 |
+| `warm_readout_cap50_lam1` | 0.500 | 0.310 | 0.040 | 0.005 | 0.005 | 0.830 |
+| `warm_prereadout_counter1_lam1e-2` | 0.535 | 0.280 | 0.040 | 0.000 | 0.000 | 0.840 |
+| `warm_orth_lam1e-3` | 0.490 | 0.260 | 0.010 | 0.005 | 0.000 | 0.770 |
+| `warm_readout_counter1_lam1e-2` | 0.515 | 0.395 | 0.070 | 0.025 | missing | 0.720 |
+
+Interpretation:
+
+- The completed 76%-class warm-start variants do not clearly beat the
+  softlip tiered baseline. They mostly match or trail it at eps `1/255` and
+  eps `4/255`.
+- `warm_prereadout_cap10_lam1` is the best completed 76%-class warm-start
+  result at eps `2/255` (`0.345` robust), but it falls to `0.020` by eps
+  `4/255`.
+- `warm_readout_counter1_lam1e-2` has the best robust accuracy at eps `2`,
+  `4`, and `6`, and the best robust-given-clean ratios, but its classifier
+  was interrupted early and only reached `70.20%` validation top-1, so it is
+  a promising stress test rather than an apples-to-apples improvement.
+- `warm_readout_cap90_lam1` still needs a clean rerun of makeset and
+  classifier before it can be compared.
 
 ### Earlier PGD-200 sweep with attack inner phi steps = 10
 
@@ -270,18 +347,18 @@ What looks promising:
 - CNN classifiers over spatial phi can reach roughly `67%` to `72%`.
 - The matched inner-5 classifiers themselves are healthy: `76.27%` logged
   top-1 for vanilla and `75.73%` for softlip tiered.
-- In the patched no-clip matched inner-5 PGD sweep, softlip tiered has a
-  small clean, robust, and conditional-robust advantage over vanilla at eps
-  `1/255`, `2/255`, and `4/255`.
+- In the patched no-clip matched inner-5 PGD sweep, the completed `n=1000`
+  run gives softlip tiered nearly equal clean accuracy to vanilla and a small
+  robust/conditional-robust advantage at eps `1/255`, `2/255`, and `4/255`.
 - The older cap90 run showed a weak-positive robustness signal at eps
   `2/255` and above, but that run used `10` attack fitting steps and is no
   longer the cleanest comparison.
 
 What is not enough yet:
 
-- In the patched matched inner-5 rerun, eps `6/255` leaves `0/200` robust
-  vanilla samples and only `1/200` robust softlip samples; eps `8/255`
-  robust accuracy is `0.0` for both models on 200 images.
+- In the patched matched inner-5 `n=1000` rerun, eps `6/255` leaves only
+  `3/1000` robust vanilla samples and `5/1000` robust softlip samples; eps
+  `8/255` leaves `3/1000` vanilla and `1/1000` softlip.
 - The previous softlip tiered clean accuracy drop inside PGD (`61%`) was
   caused by attack-time clean/final refit gradient clipping. With clipping
   disabled, clean accuracy on the first 200 samples is `79%` vanilla and
@@ -289,9 +366,8 @@ What is not enough yet:
 - Softlip cap90 has much lower clean accuracy on the attacked subset
   (`62.5%` vs `75.5%`), so the comparison is not clean-accuracy matched.
 - Absolute robust accuracy is still very low by eps `4/255`.
-- The matched inner-5 softlip advantage is small and based on only 200
-  samples, so it is a signal to investigate rather than a final robustness
-  claim.
+- The matched inner-5 softlip advantage remains small even at `n=1000`, so it
+  is a real signal to investigate rather than a final robustness claim.
 - Some saved summaries mix old classifiers, MLP classifiers, tuned CNNs, and
   smoke-test artifacts. Always check the exact classifier path in the PGD log.
 
@@ -325,18 +401,15 @@ What is not enough yet:
 
 ## Immediate Next Steps
 
-1. Pin one CIFAR attack protocol:
-   - vanilla spatial SIREN e512
-   - softlip tiered e12
-   - same CNN classifier family
-   - same first-N test subset
-   - PGD-200
-   - eps `{1,2,4,6,8}/255`
-   - same fitting budget for functaset creation, classifier evaluation, and
-     attack (`5` inner phi steps for the current rerun)
+1. Treat the vanilla e512 vs softlip tiered e12 inner-5 PGD-200, `n=1000`,
+   eps `{1,2,4,6,8}/255` sweep as the current pinned CIFAR baseline.
 
-2. Scale the patched no-clip matched protocol to larger sample counts
-   (`n=1000` first) to check whether the small softlip edge persists.
+2. Rerun the promising or incomplete warm-start leads cleanly:
+   - `warm_readout_counter1_lam1e-2` with a full 40-epoch classifier and
+     eps `8/255`
+   - `warm_readout_cap90_lam1` from makeset through classifier and PGD
+   - optionally milder counter targets to keep clean classifier accuracy near
+     the 76% baseline
 
 3. Add attack-strength checks for the corrected protocol:
    - PGD LR sweep
@@ -363,8 +436,12 @@ For CIFAR-10, Spatial Functa makes the parameter-space pipeline viable:
 good reconstruction and roughly 70% clean classification are now possible.
 The patched no-clip matched inner-5 rerun fixed both the fitting-budget
 mismatch and the attack-time clean-refit gradient-clipping bug. Softlip
-tiered has a small robustness edge at eps `1/255` to `4/255` while also
-having slightly higher clean accuracy on the first 200 samples (`82%` vs
-`79%`), but both models collapse by eps `6/255` to `8/255`. Any publishable
-result needs larger-sample confirmation, a pinned adaptive attack protocol,
-and modulation-stability diagnostics.
+tiered has a small robustness edge at eps `1/255` to `4/255`; on the
+completed `n=1000` sweep it has nearly equal clean accuracy (`76.3%` vs
+`76.1%`) and the clearest edge at eps `4/255` (`6.4%` vs `4.4%` robust).
+Both models still collapse by eps `6/255` to `8/255`. The first warm-start
+cap/orthogonal sweep did not produce a clean dominant replacement:
+the 76%-class cap variants mostly trail softlip tiered, while the aggressive
+readout-counter variant looks more robust only with a lower, interrupted
+classifier. Any publishable result needs larger-sample confirmation, a
+pinned adaptive attack protocol, and modulation-stability diagnostics.

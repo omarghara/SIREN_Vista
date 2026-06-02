@@ -18,7 +18,7 @@ This master's thesis is about **parameter-space classifiers built on implicit ne
 
 ## Current active focus: CIFAR-10 Spatial Functa
 
-As of 2026-05-30, the active research target is **CIFAR-10 robustness**.
+As of 2026-06-02, the active research target is **CIFAR-10 robustness**.
 The MNIST results are useful background, but the next claim needs to be on
 CIFAR-10:
 
@@ -63,19 +63,34 @@ Short version:
   refit no longer clips modulation gradients by default. This matches
   `makeset.py`; the older clipped PGD rerun artificially underfit softlip phi.
 - The patched no-clip matched inner-5 PGD-200 sweep over eps
-  `{1,2,4,6,8}/255` gives softlip tiered slightly better clean and robust
-  accuracy at eps `1/255`, `2/255`, `4/255`, and `6/255`; both models are at
-  `0.0` robust by eps `8/255`.
-- Clean accuracy inside the patched attack is now matched to the saved
-  functaset subset: `0.790` vanilla vs `0.820` softlip tiered on the first
-  `200` CIFAR-10 test images.
+  `{1,2,4,6,8}/255` now has `n=1000` results for vanilla e512 and softlip
+  tiered e12. Softlip has nearly equal clean accuracy (`0.763` vs `0.761`)
+  and a small robust edge at eps `1/255`, `2/255`, `4/255`, and `6/255`.
+- The clearest `n=1000` softlip edge is eps `4/255`: robust `0.064` softlip
+  vs `0.044` vanilla. Both are essentially broken by eps `8/255`
+  (`0.001` softlip, `0.003` vanilla).
+- A warm-start regularizer sweep was run on top of the vanilla e512 backbone:
+  readout caps, final-sine caps, counter-amplification caps, and an
+  orthogonality penalty. Results live under
+  `runs/cifar10_spatial_inner5_warmstart_models` and are documented in
+  `context/cifar10_warmstart_regularizer_experiments.md`.
+- The completed 76%-class warm-start variants do not yet dominate softlip
+  tiered. `warm_prereadout_cap10_lam1` is best among the completed clean
+  variants at eps `2/255` (`0.345` robust, clean `0.815`) but drops to
+  `0.020` at eps `4/255`.
+- `warm_readout_counter1_lam1e-2` looks most robust at eps `2/255` to
+  `6/255` (`0.395`, `0.070`, `0.025` robust), but its classifier was
+  interrupted around `70.20%` validation top-1, so it is a rerun candidate,
+  not a final comparison.
+- `warm_readout_cap90_lam1` still lacks a complete makeset/classifier/PGD
+  evaluation.
 - Earlier cap90 PGD-200 results showed a weak-positive softlip signal at eps
   `2/255` and above, but those used attack `mod_steps=10` and should not be
   mixed with the new matched inner-5 protocol.
 - The CIFAR robustness result is improved but not thesis-ready yet; the next
-  issue is scaling the corrected no-clip protocol to larger `n`, adding
-  stronger attack checks, and understanding why both models collapse by
-  eps `6/255` to `8/255`.
+  issue is rerunning promising warm-start leads cleanly, scaling the corrected
+  no-clip protocol to larger `n`, adding stronger attack checks, and
+  understanding why most models collapse by eps `6/255` to `8/255`.
 
 ### Core pipeline
 Instead of classifying directly in signal space (for example raw pixels), the pipeline is:

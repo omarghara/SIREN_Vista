@@ -17,4 +17,4 @@
 - PGD steps: `200`
 - PGD LR: `0.01`
 - PGD eps list: `1 2 4 6 8`
-- PGD max samples: `200`
+- PGD max samples: `1000`
