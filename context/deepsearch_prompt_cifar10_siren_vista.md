@@ -11,6 +11,18 @@ research plan. Please act as an expert researcher in adversarial robustness,
 implicit neural representations, meta-learning, neural fields, Lipschitz neural
 networks, and bilevel optimization.
 
+GitHub repository:
+
+```text
+https://github.com/omarghara/SIREN_Vista
+```
+
+Use the repository as extra implementation context if it is accessible, but do
+not rely only on the code. The main task is to search the literature and propose
+research directions. If you inspect the repo, focus on the CIFAR-10 Spatial
+Functa pipeline, the SIREN variants, the PGD attack code, the inner phi-fitting
+logic, and the warm-start regularizer experiments.
+
 ## Project Goal
 
 The goal is to understand whether a Lipschitz-constrained SIREN/INR backbone can
@@ -366,4 +378,3 @@ If there are no direct papers for this exact setup, say that clearly and use the
 closest adjacent literature, explaining the inference you are making.
 
 Please cite primary sources whenever possible and include links.
-

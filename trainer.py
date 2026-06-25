@@ -18,6 +18,7 @@ import argparse
 from utils import set_random_seeds
 import variants
 from diagnostics import layer_sigmas, format_sigmas_one_liner
+import spectral_projection
 
 
 def write_checkpoint_summary(savedir, ckpt):
@@ -41,7 +42,9 @@ def write_checkpoint_summary(savedir, ckpt):
         lines.append(f"- **training epoch range**: {ers}–{ere}")
     lines.append("")
 
-    for section, key in (("model_args", "model_args"), ("variant_args", "variant_args")):
+    for section, key in (("model_args", "model_args"),
+                         ("variant_args", "variant_args"),
+                         ("projection_args", "projection_args")):
         args_dict = ckpt.get(key)
         if not args_dict:
             continue
@@ -188,6 +191,7 @@ def fit(
         voxels=False,
         penalty_fn=None,
         log_sigmas_every=0,
+        post_step_fn=None,
 ):
     """
     Fit the INR for each specific sample for inner_steps steps to perform meta-learning.
@@ -207,6 +211,9 @@ def fit(
         report every N outer batches via ``tqdm.write`` (so the progress bar
         is preserved). Useful for calibrating soft-Lipschitz L / lambda.
         Default: 0 (off).
+    :param post_step_fn: Optional callable ``(batch_idx) -> None`` invoked
+        immediately after each ``outer_optimizer.step()``. Used for hard SVD
+        spectral projection of selected weights. Default: None (no-op).
     :return: Average representation loss.
     """
   
@@ -268,6 +275,8 @@ def fit(
         # Clip the gradient.
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         outer_optimizer.step()
+        if post_step_fn is not None:
+            post_step_fn(batch_idx)
         losses.append(outer_loss.item())
         mse_losses.append(mse_component)
         pen_losses.append(pen_component)
@@ -379,6 +388,7 @@ def get_args():
                         help='Spatial modulation type. Only shift is supported.')
 
     variants.add_all_variant_args(parser)
+    spectral_projection.add_args(parser)
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -422,6 +432,25 @@ if __name__ == '__main__':
     criterion = nn.MSELoss().cuda() if torch.cuda.is_available() else nn.MSELoss()
     penalty_fn = lambda m: variants.penalty(args.variant, m, args)
 
+    # Hard SVD spectral projection (disabled unless --svd-proj is set).
+    projection_plan = spectral_projection.build_projection_plan(modSiren, args)
+    projection_meta = spectral_projection.projection_metadata(args, projection_plan)
+    if projection_plan is not None:
+        print(f"[svd-proj] enabled: target={args.svd_proj_target} "
+              f"mode={args.svd_proj_cap_mode} every={args.svd_proj_every} "
+              f"layers={len(projection_plan)}")
+        for p in projection_plan:
+            print(f"[svd-proj]   {p.name:12s} cap={p.cap:.6g} "
+                  f"sigma {spectral_projection._exact_sigma(p.linear.weight):.6g} -> "
+                  f"{min(spectral_projection._exact_sigma(p.linear.weight), p.cap):.6g}")
+        proj_every = max(1, int(getattr(args, 'svd_proj_every', 1)))
+
+        def post_step_fn(batch_idx):
+            if batch_idx % proj_every == 0:
+                spectral_projection.apply_projection_(projection_plan)
+    else:
+        post_step_fn = None
+
     start_epoch = 0
     best_loss = float('Inf')
     if args.resume is not None:
@@ -446,6 +475,9 @@ if __name__ == '__main__':
         run_slug = args.model_name
     else:
         run_slug = variants.slug(args.variant, args)
+        proj_slug = spectral_projection.slug(args)
+        if proj_slug:
+            run_slug = f"{run_slug}_{proj_slug}" if run_slug else proj_slug
     savedir = f"model_{args.dataset}/{run_slug}" if run_slug else f"model_{args.dataset}"
 
     os.makedirs(savedir, exist_ok=True)
@@ -460,6 +492,7 @@ if __name__ == '__main__':
             voxels=args.dataset=='modelnet',
             penalty_fn=penalty_fn,
             log_sigmas_every=args.log_sigmas_every,
+            post_step_fn=post_step_fn,
         )
         if loss < best_loss:
             best_loss = loss
@@ -474,6 +507,7 @@ if __name__ == '__main__':
                 'epoch_range_start': initial_start_epoch,
                 'epoch_range_end': epoch_range_end,
                 'variant_args': variants._extract_variant_args(args, args.variant),
+                'projection_args': projection_meta,
                 'model_args': {
                     'dataset': args.dataset,
                     'hidden_dim': args.hidden_dim,

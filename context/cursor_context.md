@@ -18,7 +18,7 @@ This master's thesis is about **parameter-space classifiers built on implicit ne
 
 ## Current active focus: CIFAR-10 Spatial Functa
 
-As of 2026-06-02, the active research target is **CIFAR-10 robustness**.
+As of 2026-06-03, the active research target is **CIFAR-10 robustness**.
 The MNIST results are useful background, but the next claim needs to be on
 CIFAR-10:
 
@@ -84,13 +84,26 @@ Short version:
   not a final comparison.
 - `warm_readout_cap90_lam1` still lacks a complete makeset/classifier/PGD
   evaluation.
+- A second cap sweep was run by warm-starting from the softlip tiered e12
+  checkpoint itself, then capping either the RGB readout or final sine layer
+  to `50%` or `10%` of the softlip checkpoint's own sigma. These four runs
+  trained for 5 epochs and completed inner-5 makeset, CNN classifier, and
+  PGD-200 at eps `{1,2,4,6}/255`.
+- The softlip-warmstart cap diagnostics show that only the 50% final-sine
+  cap nearly landed (`saved sigma / cap = 1.02x`). The 50% readout cap stayed
+  above cap (`1.32x`), and the 10% caps were still far above cap (`5.94x`
+  for readout, `4.20x` for final sine).
+- The new softlip-warmstart PGD results do not clearly beat softlip tiered:
+  `warmsoftlip_readout_cap50_lam1.0_e5` matches eps `1/255` and improves
+  eps `2/255`/`6/255`, but loses clean accuracy and eps `4/255`; the other
+  rows are mixed or worse.
 - Earlier cap90 PGD-200 results showed a weak-positive softlip signal at eps
   `2/255` and above, but those used attack `mod_steps=10` and should not be
   mixed with the new matched inner-5 protocol.
 - The CIFAR robustness result is improved but not thesis-ready yet; the next
-  issue is rerunning promising warm-start leads cleanly, scaling the corrected
-  no-clip protocol to larger `n`, adding stronger attack checks, and
-  understanding why most models collapse by eps `6/255` to `8/255`.
+  issue is rerunning only genuinely promising leads cleanly, scaling the
+  corrected no-clip protocol to larger `n`, adding stronger attack checks,
+  and understanding why most models collapse by eps `6/255` to `8/255`.
 
 ### Core pipeline
 Instead of classifying directly in signal space (for example raw pixels), the pipeline is:

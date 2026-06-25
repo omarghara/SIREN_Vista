@@ -1,8 +1,0 @@
-model,target_layer,orth_form,raw_term
-warm_orth_lam1e-3,sine.0,auto,82.26718139648438
-warm_orth_lam1e-3,sine.1,auto,0.003731723874807358
-warm_orth_lam1e-3,sine.2,auto,0.003712117439135909
-warm_orth_lam1e-3,sine.3,auto,0.0037168944254517555
-warm_orth_lam1e-3,sine.4,auto,0.003710805205628276
-warm_orth_lam1e-3,sine.5,auto,0.003718634368851781
-warm_orth_lam1e-3,readout,auto,0.3219888508319855

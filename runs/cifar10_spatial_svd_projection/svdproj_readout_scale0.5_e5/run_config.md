@@ -1,0 +1,21 @@
+# CIFAR-10 svdproj_readout_scale0.5_e5 Spatial-Functa Inner-5 Run Config
+
+- SIREN checkpoint: `model_cifar10/cifar10_spatial_warmvanilla_svdproj_readout_scale0.5_e5/modSiren.pth`
+- functaset train_all: `runs/cifar10_spatial_svd_projection/svdproj_readout_scale0.5_e5/functaset/svdproj_readout_scale0.5_e5_inner3_train_all50000.pkl`
+- functaset test: `runs/cifar10_spatial_svd_projection/svdproj_readout_scale0.5_e5/functaset/svdproj_readout_scale0.5_e5_inner3_test.pkl`
+- makeset inner steps: `3`
+- makeset inner lr: `0.01`
+- makeset optimizer: `sgd`
+- makeset variant: `vanilla`
+- classifier type: `cnn`
+- classifier lr: `0.003`
+- classifier width: `256`
+- classifier dropout: `0.1`
+- classifier normalize phi: `1`
+- classifier epochs: `40`
+- classifier checkpoint: `runs/cifar10_spatial_svd_projection/svdproj_readout_scale0.5_e5/cifar10_cnn_classifier_best_sweep_inner3/best_classifier.pth`
+- PGD mod steps: `3`
+- PGD steps: `100`
+- PGD LR: `0.01`
+- PGD eps list: `1 2 4 6`
+- PGD max samples: `100`

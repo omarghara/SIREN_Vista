@@ -2,7 +2,7 @@
 
 ## Current CIFAR-10 Attack Status
 
-Updated: 2026-06-02
+Updated: 2026-06-03
 
 The active attack focus is now CIFAR-10 Spatial Functa. Older MNIST notes
 below are historical context.
@@ -151,6 +151,54 @@ Warm-start interpretation:
 - `warm_readout_counter1_lam1e-2` is the most robust-looking variant, but its
   classifier was interrupted early and eps `8/255` is missing, so treat this
   as a lead to rerun, not a final result.
+
+Softlip-warmstart cap sweep, same matched inner-5 PGD-200 protocol:
+
+Artifacts:
+
+- launcher:
+  `scripts/run_cifar10_spatial_softlip_warmstart_cap_pipeline.sh`
+- root:
+  `runs/cifar10_spatial_inner5_softlip_warmstart_caps`
+- backbones:
+  `model_cifar10/cifar10_spatial_warmsoftlip_*_lam1.0_e5`
+
+These four models warm-started from the existing softlip tiered e12 backbone,
+then capped either the RGB readout or the final sine layer relative to the
+softlip checkpoint itself. Each backbone was trained for 5 meta-learning
+epochs with `lambda = 1.0`, then evaluated with inner-5 makeset, CNN
+classifier, and PGD eps `{1,2,4,6}/255`.
+
+Loss/cap convergence:
+
+| model | best total loss | final MSE | final penalty | saved sigma / cap | cap status |
+|---|---:|---:|---:|---:|---|
+| `warmsoftlip_readout_cap50_lam1.0_e5` | 0.002912 | 0.002311 | 0.000601 | 1.32x | above cap |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | 0.008562 | 0.003182 | 0.005528 | 5.94x | far above cap |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | 0.001914 | 0.001863 | 0.000051 | 1.02x | almost at cap |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | 0.025236 | 0.001853 | 0.023382 | 4.20x | far above cap |
+
+PGD-200 results, `n=200`:
+
+| model | best val top-1 | clean | eps1 robust | eps2 robust | eps4 robust | eps6 robust |
+|---|---:|---:|---:|---:|---:|---:|
+| softlip tiered e12 inner5 baseline | 75.73% | 0.820 | 0.575 | 0.315 | 0.065 | 0.005 |
+| `warmsoftlip_readout_cap50_lam1.0_e5` | 75.91% | 0.790 | 0.575 | 0.340 | 0.040 | 0.015 |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | 75.93% | 0.795 | 0.515 | 0.335 | 0.065 | 0.010 |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | 76.04% | 0.805 | 0.530 | 0.345 | 0.045 | 0.000 |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | 76.95% | 0.815 | 0.535 | 0.320 | 0.025 | 0.005 |
+
+Softlip-warmstart interpretation:
+
+- No new softlip-warmstarted cap model clearly dominates the original
+  softlip tiered baseline.
+- `warmsoftlip_readout_cap50_lam1.0_e5` is the most interesting row because
+  it matches eps `1/255` and improves eps `2/255` and `6/255`, but it has
+  lower clean accuracy and worse eps `4/255`.
+- The 50% final-sine cap nearly converged, but its PGD result is not better
+  than softlip tiered.
+- The 10% caps are under-converged: their PGD rows should not be interpreted
+  as evidence for a successfully enforced 10% cap.
 
 Earlier saved PGD-200 results with attack inner phi steps = `10`:
 

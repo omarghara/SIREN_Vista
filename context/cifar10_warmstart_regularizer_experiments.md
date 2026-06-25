@@ -1,6 +1,6 @@
 # CIFAR-10 Warm-Started SIREN Regularizer Experiments
 
-Updated: 2026-06-02
+Updated: 2026-06-03
 
 ## Purpose
 
@@ -456,6 +456,81 @@ Interpretation:
   interruption and eps `8/255` has not been run.
 - None of these warm-start variants clearly dominates the earlier softlip
   tiered baseline yet.
+
+## Follow-Up: Softlip-Warmstarted Cap Sweep
+
+Updated 2026-06-03. After the vanilla-warmstart experiments, we ran a smaller
+follow-up sweep starting from the already trained softlip tiered e12 checkpoint:
+
+```text
+model_cifar10/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e12_inner3_moptsgd_adamphi3_lr1e-02_softlip_cifar_spatial_tiered_lam1e-02_sine_and_readout_train50000_test10000/modSiren.pth
+```
+
+The goal was to test whether adding one extra late-layer cap on top of the
+already useful softlip model improves robustness. The same checkpoint was used
+as both the warm-start source and the spectral-cap reference.
+
+Launcher:
+
+```text
+scripts/run_cifar10_spatial_softlip_warmstart_cap_pipeline.sh
+```
+
+Common settings:
+
+- `NUM_EPOCHS=5`
+- `VARIANT=spectral_cap`
+- `SPEC_CAP_LAMBDA=1.0`
+- `SPEC_CAP_MODE=reference_scale`
+- downstream makeset inner steps: `5`
+- attack mod steps: `5`
+- PGD eps list: `{1,2,4,6}/255`
+
+The reference singular values were:
+
+| target | softlip reference sigma | 50% cap | 10% cap |
+|---|---:|---:|---:|
+| final sine layer `siren.net.5.affine.weight` | `0.461347` | `0.230674` | `0.046135` |
+| RGB readout `siren.hidden2rgb.weight` | `0.151287` | `0.075644` | `0.015129` |
+
+Loss convergence:
+
+| model | target | epoch 0 total / MSE / pen | final total / MSE / pen | best total |
+|---|---|---:|---:|---:|
+| `warmsoftlip_readout_cap50_lam1.0_e5` | readout 50% | `0.004915 / 0.002954 / 0.001961` | `0.002912 / 0.002311 / 0.000601` | `0.002912` |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | readout 10% | `0.013154 / 0.003538 / 0.009617` | `0.008710 / 0.003182 / 0.005528` | `0.008562` |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | final sine 50% | `0.020835 / 0.002206 / 0.018629` | `0.001914 / 0.001863 / 0.000051` | `0.001914` |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | final sine 10% | `0.100623 / 0.002212 / 0.098411` | `0.025236 / 0.001853 / 0.023382` | `0.025236` |
+
+Exact saved-checkpoint cap audit:
+
+| model | cap | saved sigma | sigma / cap | weighted penalty | conclusion |
+|---|---:|---:|---:|---:|---|
+| `warmsoftlip_readout_cap50_lam1.0_e5` | `0.075644` | `0.099906` | `1.32x` | `5.89e-04` | reduced, but not at cap |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | `0.015129` | `0.089827` | `5.94x` | `5.58e-03` | did not converge to cap |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | `0.230674` | `0.236185` | `1.02x` | `3.04e-05` | nearly reached cap |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | `0.046135` | `0.193868` | `4.20x` | `2.18e-02` | did not converge to cap |
+
+Classifier and PGD-200 results, `n=200`:
+
+| model | best val top-1 | clean | eps1 robust | eps2 robust | eps4 robust | eps6 robust |
+|---|---:|---:|---:|---:|---:|---:|
+| softlip tiered e12 inner5 baseline | 75.73% | 0.820 | 0.575 | 0.315 | 0.065 | 0.005 |
+| `warmsoftlip_readout_cap50_lam1.0_e5` | 75.91% | 0.790 | 0.575 | 0.340 | 0.040 | 0.015 |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | 75.93% | 0.795 | 0.515 | 0.335 | 0.065 | 0.010 |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | 76.04% | 0.805 | 0.530 | 0.345 | 0.045 | 0.000 |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | 76.95% | 0.815 | 0.535 | 0.320 | 0.025 | 0.005 |
+
+Conclusion:
+
+- The follow-up did not produce a clear improvement over the original softlip
+  tiered e12 baseline.
+- The 50% final-sine cap is the only run that almost achieved the intended
+  cap, but it did not improve PGD robustness.
+- The readout 50% run is the most interesting robustness trade-off, but it is
+  mixed: better eps `2/255` and `6/255`, worse clean and eps `4/255`.
+- The strict 10% caps need more training or a different schedule before they
+  can be treated as successful 10% cap experiments.
 
 ## Recommended Run Order
 

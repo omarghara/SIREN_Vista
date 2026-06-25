@@ -1,0 +1,21 @@
+# CIFAR-10 warmsoftlip_readout_cap50_lam1.0_e5 Spatial-Functa Inner-5 Run Config
+
+- SIREN checkpoint: `model_cifar10/cifar10_spatial_warmsoftlip_readout_cap50_lam1.0_e5/modSiren.pth`
+- functaset train_all: `runs/cifar10_spatial_inner5_softlip_warmstart_caps/warmsoftlip_readout_cap50_lam1.0_e5/functaset/warmsoftlip_readout_cap50_lam1.0_e5_inner5_train_all50000.pkl`
+- functaset test: `runs/cifar10_spatial_inner5_softlip_warmstart_caps/warmsoftlip_readout_cap50_lam1.0_e5/functaset/warmsoftlip_readout_cap50_lam1.0_e5_inner5_test.pkl`
+- makeset inner steps: `5`
+- makeset inner lr: `0.01`
+- makeset optimizer: `sgd`
+- makeset variant: `vanilla`
+- classifier type: `cnn`
+- classifier lr: `0.003`
+- classifier width: `256`
+- classifier dropout: `0.1`
+- classifier normalize phi: `1`
+- classifier epochs: `40`
+- classifier checkpoint: `runs/cifar10_spatial_inner5_softlip_warmstart_caps/warmsoftlip_readout_cap50_lam1.0_e5/cifar10_cnn_classifier_best_sweep_inner5/best_classifier.pth`
+- PGD mod steps: `5`
+- PGD steps: `200`
+- PGD LR: `0.01`
+- PGD eps list: `1 2 4 6`
+- PGD max samples: `200`

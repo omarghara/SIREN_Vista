@@ -1,5 +1,0 @@
-{
-  "test_top1": 70.98,
-  "test_top5": 96.95,
-  "checkpoint": "runs/functa_like_cifar10_spatial_paper_siren_h256_md1024_d6_lat8x16_freq10.0_nearest_lc_norm01_extlr3e-05_e12_inner3_moptsgd_adamphi3_lr1e-02_softlip_cifar_spatial_tiered_lam1e-02_sine_and_readout_train50000_test10000/classifier_sweep/cv_quick_v1/best_retrained_classifier.pth"
-}

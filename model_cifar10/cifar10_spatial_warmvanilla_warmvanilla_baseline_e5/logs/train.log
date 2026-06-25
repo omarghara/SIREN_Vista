@@ -1,0 +1,1 @@
+scripts/run_cifar10_spatial_warmstart_svd_projection_pipeline.sh: line 182: --inner-optim: command not found

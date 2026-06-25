@@ -1,6 +1,6 @@
 # CIFAR-10 Spatial Functa Robustness Status
 
-Updated: 2026-06-02
+Updated: 2026-06-03
 
 ## Active Goal
 
@@ -292,6 +292,66 @@ Interpretation:
 - `warm_readout_cap90_lam1` still needs a clean rerun of makeset and
   classifier before it can be compared.
 
+### Softlip-warmstart cap sweep
+
+After the vanilla-warmstart sweep, four new runs were warm-started from the
+softlip tiered e12 checkpoint itself and capped either the RGB readout or the
+final sine layer relative to the softlip checkpoint's own singular values.
+
+Artifacts:
+
+- launcher:
+  `scripts/run_cifar10_spatial_softlip_warmstart_cap_pipeline.sh`
+- backbone roots:
+  `model_cifar10/cifar10_spatial_warmsoftlip_*_lam1.0_e5`
+- evaluation root:
+  `runs/cifar10_spatial_inner5_softlip_warmstart_caps`
+
+Common protocol:
+
+- warm-start/checkpoint reference: softlip tiered e12
+- train 5 meta-learning epochs
+- `spectral_cap`, `reference_scale`, `lambda = 1.0`
+- make inner-5 functaset
+- train the same CNN classifier
+- PGD-200 with attack `--mod-steps 5`
+- eps `{1,2,4,6}/255`, `n=200`
+
+Loss and cap convergence:
+
+| model | best total loss | final MSE | final penalty | saved sigma / cap | cap status |
+|---|---:|---:|---:|---:|---|
+| `warmsoftlip_readout_cap50_lam1.0_e5` | `0.002912` | `0.002311` | `0.000601` | `1.32x` | did not fully reach cap |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | `0.008562` | `0.003182` | `0.005528` | `5.94x` | did not reach cap |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | `0.001914` | `0.001863` | `0.000051` | `1.02x` | almost reached cap |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | `0.025236` | `0.001853` | `0.023382` | `4.20x` | did not reach cap |
+
+The exact SVD audit showed that the 50% final-sine cap nearly landed. The 50%
+readout cap moved in the intended direction but remained above cap. Both 10%
+caps were still strongly violating their requested cap after 5 epochs.
+
+Classifier and PGD-200 results:
+
+| model | best val top-1 | clean | eps1 robust | eps2 robust | eps4 robust | eps6 robust |
+|---|---:|---:|---:|---:|---:|---:|
+| softlip tiered e12 inner5 baseline | 75.73% | 0.820 | 0.575 | 0.315 | 0.065 | 0.005 |
+| `warmsoftlip_readout_cap50_lam1.0_e5` | 75.91% | 0.790 | 0.575 | 0.340 | 0.040 | 0.015 |
+| `warmsoftlip_readout_cap10_lam1.0_e5` | 75.93% | 0.795 | 0.515 | 0.335 | 0.065 | 0.010 |
+| `warmsoftlip_prereadout_cap50_lam1.0_e5` | 76.04% | 0.805 | 0.530 | 0.345 | 0.045 | 0.000 |
+| `warmsoftlip_prereadout_cap10_lam1.0_e5` | 76.95% | 0.815 | 0.535 | 0.320 | 0.025 | 0.005 |
+
+Interpretation:
+
+- These runs do not clearly improve on the existing softlip tiered baseline.
+- `warmsoftlip_readout_cap50_lam1.0_e5` is the best mixed result: it matches
+  softlip at eps `1/255`, improves eps `2/255` and eps `6/255`, but loses at
+  eps `4/255` and has lower clean accuracy.
+- `warmsoftlip_prereadout_cap50_lam1.0_e5` has the best eps `2/255` robust
+  accuracy among this mini-sweep, but it is worse at eps `1/255`, `4/255`,
+  and `6/255`.
+- The strict 10% caps should be interpreted as under-converged pressure
+  experiments, not as successful 10% spectral caps.
+
 ### Earlier PGD-200 sweep with attack inner phi steps = 10
 
 These older results are still useful historical context, but they should not
@@ -411,23 +471,28 @@ What is not enough yet:
    - optionally milder counter targets to keep clean classifier accuracy near
      the 76% baseline
 
-3. Add attack-strength checks for the corrected protocol:
+3. Treat the new softlip-warmstart cap sweep as a negative/diagnostic result:
+   it reduces spectral amplification diagnostics, but it does not dominate
+   softlip tiered on PGD. If revisited, the 10% caps need more epochs or a
+   different schedule before they can be evaluated as actually-capped models.
+
+4. Add attack-strength checks for the corrected protocol:
    - PGD LR sweep
    - random restarts
    - inner mod steps `10` vs `20`
    - BPDA or transfer-style checks if PGD behavior looks suspicious
 
-4. Run a CIFAR cap/reference-scale sweep:
+5. Run a CIFAR cap/reference-scale sweep:
    - reference-scaled caps, e.g. `0.95`, `0.90`, `0.85`
    - optionally include a mild modulation cap
    - keep reconstruction and clean classifier accuracy as constraints
 
-5. Add CIFAR modulation-stability diagnostics:
+6. Add CIFAR modulation-stability diagnostics:
    - `||phi(x + delta) - phi(x)|| / ||delta||`
    - classifier-logit change per input perturbation
    - classifier-logit change per phi perturbation
 
-6. Track the old clipped-run numbers only as a debugging artifact, not as
+7. Track the old clipped-run numbers only as a debugging artifact, not as
    CIFAR evidence.
 
 ## Current Working Thesis Statement
@@ -443,5 +508,7 @@ Both models still collapse by eps `6/255` to `8/255`. The first warm-start
 cap/orthogonal sweep did not produce a clean dominant replacement:
 the 76%-class cap variants mostly trail softlip tiered, while the aggressive
 readout-counter variant looks more robust only with a lower, interrupted
-classifier. Any publishable result needs larger-sample confirmation, a
-pinned adaptive attack protocol, and modulation-stability diagnostics.
+classifier. The follow-up softlip-warmstart cap sweep also does not clearly
+dominate softlip tiered, and the strict 10% caps did not converge within 5
+epochs. Any publishable result needs larger-sample confirmation, a pinned
+adaptive attack protocol, and modulation-stability diagnostics.
